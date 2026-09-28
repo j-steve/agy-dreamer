@@ -486,10 +486,36 @@ def _detect_entities_in_corpus(corpus: str) -> set[str]:
     entities: set[str] = set()
     matches = re.findall(r"\b[A-Z][a-zA-Z0-9_\-\.]{2,}\b", corpus)
     common_stops = {
-        "the", "this", "that", "what", "when", "where", "how", "why",
-        "there", "here", "with", "from", "into", "about", "after",
-        "before", "could", "would", "should", "please", "check", "user",
-        "agent", "true", "false", "none", "error", "test", "file", "code",
+        "the",
+        "this",
+        "that",
+        "what",
+        "when",
+        "where",
+        "how",
+        "why",
+        "there",
+        "here",
+        "with",
+        "from",
+        "into",
+        "about",
+        "after",
+        "before",
+        "could",
+        "would",
+        "should",
+        "please",
+        "check",
+        "user",
+        "agent",
+        "true",
+        "false",
+        "none",
+        "error",
+        "test",
+        "file",
+        "code",
     }
     for m in matches:
         if m.lower() not in common_stops and len(m) > 3:
@@ -502,11 +528,56 @@ def _detect_topics_in_corpus(corpus: str) -> set[str]:
     topics: set[str] = set()
     corpus_lower = corpus.lower()
     category_patterns = {
-        "web-development": ["frontend", "backend", "react", "html", "css", "api", "rest", "graphql", "http"],
-        "data-engineering": ["sql", "database", "postgres", "sqlite", "query", "dataset", "dataframe", "etl"],
-        "devops-infrastructure": ["docker", "kubernetes", "ci/cd", "pipeline", "deploy", "server", "linux", "cloud"],
-        "machine-learning": ["model", "training", "inference", "dataset", "weights", "neural", "embedding", "llm"],
-        "system-automation": ["powershell", "bash", "cron", "script", "automation", "scheduled", "daemon"],
+        "web-development": [
+            "frontend",
+            "backend",
+            "react",
+            "html",
+            "css",
+            "api",
+            "rest",
+            "graphql",
+            "http",
+        ],
+        "data-engineering": [
+            "sql",
+            "database",
+            "postgres",
+            "sqlite",
+            "query",
+            "dataset",
+            "dataframe",
+            "etl",
+        ],
+        "devops-infrastructure": [
+            "docker",
+            "kubernetes",
+            "ci/cd",
+            "pipeline",
+            "deploy",
+            "server",
+            "linux",
+            "cloud",
+        ],
+        "machine-learning": [
+            "model",
+            "training",
+            "inference",
+            "dataset",
+            "weights",
+            "neural",
+            "embedding",
+            "llm",
+        ],
+        "system-automation": [
+            "powershell",
+            "bash",
+            "cron",
+            "script",
+            "automation",
+            "scheduled",
+            "daemon",
+        ],
     }
     for category, keywords in category_patterns.items():
         if any(kw in corpus_lower for kw in keywords):
@@ -517,7 +588,10 @@ def _detect_topics_in_corpus(corpus: str) -> set[str]:
 def _detect_components_in_corpus(corpus: str) -> set[str]:
     """Detects software components or modules referenced in the corpus."""
     components: set[str] = set()
-    matches = re.findall(r"\b[A-Z][a-zA-Z0-9]+(?:Service|Controller|Manager|Engine|Client|Pipeline|Router|Handler)\b", corpus)
+    matches = re.findall(
+        r"\b[A-Z][a-zA-Z0-9]+(?:Service|Controller|Manager|Engine|Client|Pipeline|Router|Handler)\b",
+        corpus,
+    )
     for m in matches:
         components.add(m)
     return components
@@ -621,7 +695,10 @@ def _cluster_projects(
         session_ids = [s.conversation_id for s in sessions]
 
         for item in distilled_items:
-            if item.get("suggested_slug") == slug and item["conversation_id"] not in session_ids:
+            if (
+                item.get("suggested_slug") == slug
+                and item["conversation_id"] not in session_ids
+            ):
                 session_ids.append(item["conversation_id"])
 
         projects[slug] = {
@@ -859,11 +936,13 @@ def _build_person_file_content(item: dict[str, Any]) -> str:
     lines.append(f"- **Role**: {item.get('description', 'Collaborator')}")
     if aliases:
         lines.append(f"- **Aliases**: {aliases}")
-    lines.extend([
-        "",
-        "<!-- Invariants are autonomously distilled from session transcripts by the Dreamer agent -->",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "<!-- Invariants are autonomously distilled from session transcripts by the Dreamer agent -->",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -875,11 +954,13 @@ def _build_domain_file_content(item: dict[str, Any]) -> str:
     lines = [f"# Domain: {title}", ""]
     if aliases:
         lines.append(f"- **Aliases**: {aliases}")
-    lines.extend([
-        "",
-        "<!-- Invariants are autonomously distilled from session transcripts by the Dreamer agent -->",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "<!-- Invariants are autonomously distilled from session transcripts by the Dreamer agent -->",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -894,11 +975,13 @@ def _build_project_file_content(item: dict[str, Any]) -> str:
         lines.append(f"- **Workspace**: `{workspace_uri}`")
     if aliases:
         lines.append(f"- **Aliases**: {aliases}")
-    lines.extend([
-        "",
-        "<!-- Invariants are autonomously distilled from session transcripts by the Dreamer agent -->",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "<!-- Invariants are autonomously distilled from session transcripts by the Dreamer agent -->",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 

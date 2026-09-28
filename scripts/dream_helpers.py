@@ -30,7 +30,7 @@ import sqlite3
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,7 @@ from typing import Any
 _DEFAULT_BUSY_TIMEOUT_MS: int = 5000
 _DEFAULT_MAX_THOUGHT_CHARS: int = 2000
 _DEFAULT_MIN_STEP_COUNT: int = 1
+_DEFAULT_PRIOR_CONTEXT_TURNS: int = 4
 _RUNNING_STATUS: str = "CASCADE_RUN_STATUS_RUNNING"
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,39 @@ class SessionSummary:
 
 
 @dataclass
+class CompactTurn:
+    """Represents an individual conversational turn in a compact transcript.
+
+    Attributes:
+        step_index: Integer turn or execution step index within the session.
+        created_at: Literal ISO timestamp string of the turn (empty if missing).
+        turn_type: Role or type of turn ('user' or 'agent').
+        content: Cleaned user prompt or trimmed agent thought/message.
+        is_new: True if turn occurred strictly after watermark; False if prior context.
+        goals: List of high-level planner goals formulated during this turn.
+        tool_summaries: Compact metadata dictionaries of tool calls executed in this turn.
+    """
+
+    step_index: int = 0
+    created_at: str = ""
+    turn_type: str = "user"
+    content: str = ""
+    is_new: bool = True
+    goals: list[str] = field(default_factory=list)
+    tool_summaries: list[dict[str, str]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.goals is None:
+            object.__setattr__(self, "goals", [])
+        if self.tool_summaries is None:
+            object.__setattr__(self, "tool_summaries", [])
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serializes the turn to a dictionary."""
+        return asdict(self)
+
+
+@dataclass
 class CompactTranscript:
     """Compact representation of an extracted conversation transcript.
 
@@ -106,6 +140,7 @@ class CompactTranscript:
         agent_thoughts: Trimmed internal thoughts and reasoning from planner turns.
         planner_goals: Goals and high-level plans discovered during execution.
         tool_summaries: Compact metadata dictionaries for tool invocations.
+        turns: Ordered list of CompactTurn models representing individual turns.
     """
 
     conversation_id: str
@@ -113,6 +148,171 @@ class CompactTranscript:
     agent_thoughts: list[str]
     planner_goals: list[str]
     tool_summaries: list[dict[str, str]]
+    turns: list[CompactTurn] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.turns is None:
+            object.__setattr__(self, "turns", [])
+
+    @property
+    def prior_context(self) -> list[CompactTurn]:
+        """Turns categorized as prior context (created_at <= watermark)."""
+        if not self.turns:
+            return []
+        return [t for t in self.turns if not t.is_new]
+
+    @property
+    def new_activity(self) -> list[CompactTurn]:
+        """Turns categorized as new activity (created_at > watermark)."""
+        if self.turns:
+            return [t for t in self.turns if t.is_new]
+        synthesized: list[CompactTurn] = []
+        idx = 0
+        for p in self.user_prompts:
+            synthesized.append(
+                CompactTurn(
+                    step_index=idx,
+                    turn_type="user",
+                    content=p,
+                    is_new=True,
+                )
+            )
+            idx += 1
+        for t in self.agent_thoughts:
+            synthesized.append(
+                CompactTurn(
+                    step_index=idx,
+                    turn_type="agent",
+                    content=t,
+                    is_new=True,
+                )
+            )
+            idx += 1
+        if (self.planner_goals or self.tool_summaries) and not self.agent_thoughts:
+            synthesized.append(
+                CompactTurn(
+                    step_index=idx,
+                    turn_type="agent",
+                    content="",
+                    is_new=True,
+                    goals=list(self.planner_goals),
+                    tool_summaries=list(self.tool_summaries),
+                )
+            )
+        elif (self.planner_goals or self.tool_summaries) and synthesized:
+            last_agent = next(
+                (t for t in reversed(synthesized) if t.turn_type == "agent"), None
+            )
+            if last_agent:
+                last_agent.goals = list(self.planner_goals)
+                last_agent.tool_summaries = list(self.tool_summaries)
+        return synthesized
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serializes the compact transcript to a dictionary."""
+        return asdict(self)
+
+    def render_partitioned_markdown(self) -> str:
+        """Renders transcript into partitioned Markdown with timestamps and section headers."""
+        return _render_transcript_partitioned_markdown(self)
+
+
+def _render_transcript_partitioned_markdown(transcript: CompactTranscript) -> str:
+    """Renders partitioned Markdown with explicit timestamps and section headers."""
+    sections: list[str] = []
+
+    sections.append("### Prior Context")
+    if transcript.prior_context:
+        for turn in transcript.prior_context:
+            sections.append("")
+            sections.append(_render_turn_markdown(turn))
+    else:
+        sections.append("")
+        sections.append("*(No prior context)*")
+
+    sections.append("")
+
+    sections.append("### New Activity")
+    if transcript.new_activity:
+        for turn in transcript.new_activity:
+            sections.append("")
+            sections.append(_render_turn_markdown(turn))
+    else:
+        sections.append("")
+        sections.append("*(No new activity)*")
+
+    return "\n".join(sections).strip()
+
+
+def _render_turn_markdown(turn: CompactTurn) -> str:
+    """Renders a single compact turn as structured Markdown with [YYYY-MM-DD HH:MM]."""
+    ts = _format_turn_timestamp(turn.created_at)
+    turn_type_str = str(turn.turn_type or "").lower()
+    is_user = turn_type_str in ("user", "user_input")
+    role_label = "User" if is_user else "Agent"
+
+    lines: list[str] = [f"#### {ts} {role_label}"]
+
+    content = str(turn.content or "").strip()
+    if content:
+        lines.append("")
+        lines.append(content)
+
+    if turn.goals:
+        clean_goals = [str(g).strip() for g in turn.goals if g and str(g).strip()]
+        if clean_goals:
+            lines.append("")
+            lines.append("**Goals:**")
+            for goal in clean_goals:
+                lines.append(f"- {goal}")
+
+    if turn.tool_summaries:
+        valid_tools = [t for t in turn.tool_summaries if t]
+        if valid_tools:
+            lines.append("")
+            lines.append("**Tools:**")
+            for tool in valid_tools:
+                lines.append(_render_tool_summary_line(tool))
+
+    return "\n".join(lines)
+
+
+def _render_tool_summary_line(tool_dict: dict[str, str] | Any) -> str:
+    """Formats a tool summary entry as a compact bullet point."""
+    if not isinstance(tool_dict, dict):
+        return f"- `{tool_dict}`"
+    tool_name = str(tool_dict.get("tool") or "tool").strip()
+    raw_summary = (
+        tool_dict.get("summary")
+        or tool_dict.get("toolSummary")
+        or tool_dict.get("action")
+        or tool_dict.get("toolAction")
+        or ""
+    )
+    summary = " ".join(str(raw_summary).split())
+    raw_target = tool_dict.get("target") or ""
+    target = " ".join(str(raw_target).split())
+    if summary and target:
+        return f"- `{tool_name}`: {summary} ({target})"
+    if summary:
+        return f"- `{tool_name}`: {summary}"
+    if target:
+        return f"- `{tool_name}`: {target}"
+    return f"- `{tool_name}`"
+
+
+def _format_turn_timestamp(created_at: str | datetime | date | None) -> str:
+    """Formats turn timestamp string into [YYYY-MM-DD HH:MM] representation."""
+    if not created_at or not str(created_at).strip():
+        return "[Undated]"
+    try:
+        dt = _parse_iso_datetime(created_at)
+        if dt == datetime.min.replace(tzinfo=timezone.utc):
+            return "[Undated]"
+        return f"[{dt.strftime('%Y-%m-%d %H:%M')}]"
+    except (ValueError, TypeError):
+        clean = str(created_at).strip().strip("[]\"'")
+        return f"[{clean}]"
 
 
 @dataclass
@@ -297,8 +497,15 @@ def _build_root_sessions_query(
         params.append(_RUNNING_STATUS)
 
     if since is not None:
-        clauses.append("last_modified_time > ?")
-        params.append(_format_datetime_for_sqlite(since))
+        clean_since = str(since).strip()
+        if clean_since and clean_since.lower() not in (
+            "none",
+            "null",
+            "undefined",
+            "n/a",
+        ):
+            clauses.append("last_modified_time > ?")
+            params.append(_format_datetime_for_sqlite(since))
 
     where_expr = " AND ".join(clauses)
     query = (
@@ -354,22 +561,40 @@ def get_session_by_id(
         conn.close()
 
 
-def _parse_iso_datetime(val: str | datetime) -> datetime:
-    """Parses SQLite datetime string or normalizes datetime object.
+def _parse_iso_datetime(val: str | datetime | date | float) -> datetime:
+    """Parses SQLite datetime string, epoch timestamp, or normalizes datetime/date object.
 
     Handles ISO formats with spaces, 'T', and 7-digit subsecond precision.
+    Guarantees returned datetime is timezone-aware (UTC).
     """
     if isinstance(val, datetime):
         return val if val.tzinfo is not None else val.replace(tzinfo=timezone.utc)
-    clean_str = val.strip()
+    if isinstance(val, date):
+        return datetime.combine(val, datetime.min.time(), tzinfo=timezone.utc)
+    if isinstance(val, (int, float)):
+        ts = float(val)
+        if ts > 1e11:  # Milliseconds
+            ts /= 1000.0
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+    clean_str = str(val).strip().strip("[]\"'")
     if not clean_str:
         return datetime.min.replace(tzinfo=timezone.utc)
+    if re.match(r"^\d{10,13}(?:\.\d+)?$", clean_str):
+        ts = float(clean_str)
+        if ts > 1e11:
+            ts /= 1000.0
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+    if clean_str.endswith(("Z", "z")):
+        clean_str = clean_str[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(clean_str)
+        dt = datetime.fromisoformat(clean_str)
     except ValueError:
         # Fallback if 7-digit fractional seconds caused parser error on older runtimes
         normalized = re.sub(r"(\.\d{6})\d+", r"\1", clean_str)
-        return datetime.fromisoformat(normalized)
+        dt = datetime.fromisoformat(normalized)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 def _format_datetime_for_sqlite(dt_val: datetime | str) -> str:
@@ -499,7 +724,9 @@ def clean_user_prompt(raw_content: str) -> str:
     if not raw_content or not isinstance(raw_content, str):
         return ""
     req_match = re.search(
-        r"<USER_REQUEST>(.*?)</USER_REQUEST>", raw_content, flags=re.DOTALL
+        r"<USER_REQUEST>(.*?)</USER_REQUEST>",
+        raw_content,
+        flags=re.DOTALL | re.IGNORECASE,
     )
     if req_match:
         return req_match.group(1).strip()
@@ -507,16 +734,19 @@ def clean_user_prompt(raw_content: str) -> str:
         r"<ADDITIONAL_METADATA>.*?</ADDITIONAL_METADATA>",
         "",
         raw_content,
-        flags=re.DOTALL,
+        flags=re.DOTALL | re.IGNORECASE,
     )
     cleaned = re.sub(
         r"<USER_SETTINGS_CHANGE>.*?</USER_SETTINGS_CHANGE>",
         "",
         cleaned,
-        flags=re.DOTALL,
+        flags=re.DOTALL | re.IGNORECASE,
     )
     cleaned = re.sub(
-        r"<CONTEXT_BOUNDARY>.*?</CONTEXT_BOUNDARY>", "", cleaned, flags=re.DOTALL
+        r"<CONTEXT_BOUNDARY>.*?</CONTEXT_BOUNDARY>",
+        "",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
     )
     return cleaned.strip()
 
@@ -560,6 +790,8 @@ def extract_compact_transcript(
     brain_dir: str | Path = DEFAULT_BRAIN_DIR,
     max_thought_chars: int = _DEFAULT_MAX_THOUGHT_CHARS,
     raise_on_missing: bool = False,
+    watermark: datetime | str | None = None,
+    prior_context_turns: int = _DEFAULT_PRIOR_CONTEXT_TURNS,
 ) -> CompactTranscript:
     """Streams a transcript and extracts high-leverage context while stripping multi-MB payloads.
 
@@ -568,6 +800,7 @@ def extract_compact_transcript(
     2. PLANNER_RESPONSE thoughts (trimmed to max_thought_chars).
     3. High-level planner goals and plan structures.
     4. Compact tool invocation summaries (tool, toolAction, toolSummary, status).
+    5. Turn-level CompactTurn models partitioned into Prior Context and New Activity.
 
     Explicitly discards:
     - GENERIC.content (raw stdout/terminal dumps that often reach 10+ MB).
@@ -578,6 +811,9 @@ def extract_compact_transcript(
         brain_dir: Root brain directory path.
         max_thought_chars: Character limit for internal thoughts before truncation.
         raise_on_missing: If True, raises FileNotFoundError when transcript is missing.
+        watermark: Timestamp boundary (datetime or ISO str). Turns on/before are prior context;
+            turns after are new activity. If None, all turns are marked as new activity.
+        prior_context_turns: Maximum number of recent historical turns to retain in prior context.
 
     Returns:
         CompactTranscript object containing structured, compacted session context.
@@ -595,12 +831,15 @@ def extract_compact_transcript(
             agent_thoughts=[],
             planner_goals=[],
             tool_summaries=[],
+            turns=[],
         )
 
     return _stream_and_compact_transcript(
         transcript_path=transcript_path,
         conversation_id=cid,
         max_thought_chars=max_thought_chars,
+        watermark=watermark,
+        prior_context_turns=prior_context_turns,
     )
 
 
@@ -630,12 +869,13 @@ def _stream_and_compact_transcript(
     transcript_path: Path,
     conversation_id: str,
     max_thought_chars: int,
+    watermark: datetime | str | None = None,
+    prior_context_turns: int = _DEFAULT_PRIOR_CONTEXT_TURNS,
 ) -> CompactTranscript:
-    """Streams transcript file line-by-line and accumulates compacted records."""
-    user_prompts: list[str] = []
-    agent_thoughts: list[str] = []
-    planner_goals: list[str] = []
-    tool_summaries: list[dict[str, str]] = []
+    """Streams transcript file line-by-line and accumulates compacted records and turns."""
+    watermark_dt = _normalize_watermark_datetime(watermark)
+    raw_turns: list[CompactTurn] = []
+    current_timestamp: str = ""
 
     with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
@@ -647,19 +887,73 @@ def _stream_and_compact_transcript(
             except (json.JSONDecodeError, TypeError):
                 continue
 
+            extracted_ts = _extract_turn_timestamp(record)
+            if extracted_ts:
+                current_timestamp = extracted_ts
+
             rec_type = record.get("type")
             if rec_type == "USER_INPUT":
-                prompt = clean_user_prompt(record.get("content") or "")
-                if prompt:
-                    user_prompts.append(prompt)
+                turn = _process_user_record(
+                    record=record,
+                    watermark_dt=watermark_dt,
+                    fallback_timestamp=current_timestamp,
+                )
+                if turn is not None:
+                    raw_turns.append(turn)
             elif rec_type == "PLANNER_RESPONSE":
-                _process_planner_record(
+                turn = _process_planner_turn_record(
                     record=record,
                     max_thought_chars=max_thought_chars,
-                    agent_thoughts=agent_thoughts,
-                    planner_goals=planner_goals,
-                    tool_summaries=tool_summaries,
+                    watermark_dt=watermark_dt,
+                    fallback_timestamp=current_timestamp,
                 )
+                if turn is not None:
+                    raw_turns.append(turn)
+
+    # Backfill any leading turns that lacked timestamps with the first discovered timestamp
+    first_known_ts = next(
+        (t.created_at for t in raw_turns if t.created_at and t.created_at.strip()), ""
+    )
+    if first_known_ts:
+        for t in raw_turns:
+            if not t.created_at or not t.created_at.strip():
+                t.created_at = first_known_ts
+                t.is_new = _is_turn_new(first_known_ts, watermark_dt)
+            else:
+                break
+
+    # Partition into prior context and new activity
+    prior_turns = [t for t in raw_turns if not t.is_new]
+    new_turns = [t for t in raw_turns if t.is_new]
+
+    # Bound prior context to the most recent prior_context_turns
+    effective_prior_turns = (
+        _DEFAULT_PRIOR_CONTEXT_TURNS
+        if prior_context_turns is None or not isinstance(prior_context_turns, int)
+        else prior_context_turns
+    )
+    bounded_prior: list[CompactTurn] = (
+        [] if effective_prior_turns <= 0 else prior_turns[-effective_prior_turns:]
+    )
+    final_turns = bounded_prior + new_turns
+
+    # Reconstitute aggregate lists for full backward compatibility
+    user_prompts: list[str] = []
+    agent_thoughts: list[str] = []
+    planner_goals: list[str] = []
+    tool_summaries: list[dict[str, str]] = []
+
+    for turn in final_turns:
+        if turn.turn_type.lower() in ("user", "user_input"):
+            if turn.content:
+                user_prompts.append(turn.content)
+        else:
+            if turn.content:
+                agent_thoughts.append(turn.content)
+            if turn.goals:
+                planner_goals.extend(turn.goals)
+            if turn.tool_summaries:
+                tool_summaries.extend(turn.tool_summaries)
 
     return CompactTranscript(
         conversation_id=conversation_id,
@@ -667,7 +961,185 @@ def _stream_and_compact_transcript(
         agent_thoughts=agent_thoughts,
         planner_goals=planner_goals,
         tool_summaries=tool_summaries,
+        turns=final_turns,
     )
+
+
+def _normalize_watermark_datetime(
+    watermark: datetime | date | str | float | None,
+) -> datetime | None:
+    """Normalizes watermark parameter to timezone-aware UTC datetime or None."""
+    if watermark is None:
+        return None
+    if isinstance(watermark, str):
+        clean_wm = watermark.strip().lower()
+        if not clean_wm or clean_wm in ("none", "null", "undefined", "n/a"):
+            return None
+    try:
+        dt = _parse_iso_datetime(watermark)
+        if dt == datetime.min.replace(tzinfo=timezone.utc):
+            return None
+        return dt
+    except (ValueError, TypeError):
+        logger.warning("Unparseable watermark value: %r; treating as None.", watermark)
+        return None
+
+
+def _process_user_record(
+    record: dict[str, Any],
+    watermark_dt: datetime | None,
+    fallback_timestamp: str = "",
+) -> CompactTurn | None:
+    """Processes a USER_INPUT record into a CompactTurn."""
+    prompt = clean_user_prompt(record.get("content") or "")
+    if not prompt:
+        return None
+
+    step_index = _parse_step_index(record.get("step_index"))
+    created_at = _extract_turn_timestamp(record) or fallback_timestamp
+    is_new = _is_turn_new(created_at, watermark_dt)
+
+    return CompactTurn(
+        step_index=step_index,
+        created_at=created_at,
+        turn_type="user",
+        content=prompt,
+        is_new=is_new,
+        goals=[],
+        tool_summaries=[],
+    )
+
+
+def _process_planner_turn_record(
+    record: dict[str, Any],
+    max_thought_chars: int,
+    watermark_dt: datetime | None,
+    fallback_timestamp: str = "",
+) -> CompactTurn | None:
+    """Processes a PLANNER_RESPONSE record into a CompactTurn."""
+    step_index = _parse_step_index(record.get("step_index"))
+    created_at = _extract_turn_timestamp(record) or fallback_timestamp
+    is_new = _is_turn_new(created_at, watermark_dt)
+
+    agent_thoughts: list[str] = []
+    planner_goals: list[str] = []
+    tool_summaries: list[dict[str, str]] = []
+
+    _process_planner_record(
+        record=record,
+        max_thought_chars=max_thought_chars,
+        agent_thoughts=agent_thoughts,
+        planner_goals=planner_goals,
+        tool_summaries=tool_summaries,
+    )
+
+    thought_content = agent_thoughts[0] if agent_thoughts else ""
+    if (
+        not thought_content
+        and record.get("content")
+        and isinstance(record.get("content"), str)
+    ):
+        raw_c = record.get("content", "").strip()
+        raw_c_clean = re.sub(r"<PLAN>.*?</PLAN>", "", raw_c, flags=re.DOTALL).strip()
+        if raw_c_clean:
+            if len(raw_c_clean) > max_thought_chars:
+                raw_c_clean = raw_c_clean[:max_thought_chars] + "... [TRUNCATED]"
+            thought_content = raw_c_clean
+
+    if not thought_content and not planner_goals and not tool_summaries:
+        return None
+
+    return CompactTurn(
+        step_index=step_index,
+        created_at=created_at,
+        turn_type="agent",
+        content=thought_content,
+        is_new=is_new,
+        goals=planner_goals,
+        tool_summaries=tool_summaries,
+    )
+
+
+def _is_turn_new(
+    created_at: str | datetime | date | None, watermark_dt: datetime | None
+) -> bool:
+    """Determines whether a turn is new activity based on created_at and watermark."""
+    if watermark_dt is None:
+        return True
+    if not created_at or not str(created_at).strip():
+        return True
+    try:
+        turn_dt = _parse_iso_datetime(created_at)
+        if turn_dt == datetime.min.replace(tzinfo=timezone.utc):
+            return True
+        return turn_dt > watermark_dt
+    except (ValueError, TypeError):
+        return True
+
+
+def _parse_step_index(val: Any) -> int:
+    """Safely coerces step index to integer with 0 fallback."""
+    if val is None:
+        return 0
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _extract_turn_timestamp(record: dict[str, Any]) -> str:
+    """Extracts literal created_at ISO timestamp or fallback timestamp from a record."""
+    for key in ("created_at", "timestamp", "time", "date"):
+        val = record.get(key)
+        if val is not None:
+            clean_val = str(val).strip().strip("\"'")
+            if clean_val:
+                return clean_val
+
+    meta_raw = record.get("metadata")
+    if isinstance(meta_raw, str):
+        try:
+            meta_raw = json.loads(meta_raw)
+        except (json.JSONDecodeError, TypeError):
+            meta_raw = None
+
+    if isinstance(meta_raw, dict):
+        for key in ("created_at", "timestamp", "time", "date"):
+            val = meta_raw.get(key)
+            if val is not None:
+                clean_val = str(val).strip().strip("\"'")
+                if clean_val:
+                    return clean_val
+
+    content = str(record.get("content") or "")
+    if "<ADDITIONAL_METADATA>" in content:
+        meta_match = re.search(
+            r"<ADDITIONAL_METADATA>(.*?)</ADDITIONAL_METADATA>",
+            content,
+            re.DOTALL | re.IGNORECASE,
+        )
+        meta_text = meta_match.group(1) if meta_match else ""
+        m_conv = re.search(
+            r"(?:(?:current\s+)?(?:local\s+)?time\s+is):\s*([^\n\r<]+)",
+            meta_text,
+            re.IGNORECASE,
+        )
+        if m_conv:
+            return m_conv.group(1).rstrip(".").strip().strip(".,;\"'[]")
+        m_labeled = re.search(
+            r"(?:^|\n)\s*(?:created_at|timestamp|time|date):\s*([^\n\r<]+)",
+            meta_text,
+            re.IGNORECASE,
+        )
+        if m_labeled:
+            return m_labeled.group(1).rstrip(".").strip().strip(".,;\"'[]")
+        m_iso = re.search(
+            r"\b(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(?::\d{2})?(?:[.\d]+)?(?:Z|[+-]\d{2}:?\d{2})?)\b",
+            meta_text,
+        )
+        if m_iso:
+            return m_iso.group(1).strip()
+    return ""
 
 
 def _process_planner_record(
@@ -712,8 +1184,13 @@ def _process_planner_record(
 
 def _extract_tool_summary(tc: dict[str, Any], fallback_status: str) -> dict[str, str]:
     """Extracts compact metadata from a tool invocation dictionary."""
-    name = str(tc.get("name") or "")
-    raw_args = tc.get("args") or {}
+    name = str(tc.get("name") or tc.get("tool") or "")
+    raw_args = tc.get("args") or tc.get("arguments") or {}
+    if isinstance(raw_args, str):
+        try:
+            raw_args = json.loads(raw_args)
+        except (json.JSONDecodeError, TypeError):
+            raw_args = {}
     args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
 
     action = _clean_scalar_str(args.get("toolAction"))
@@ -723,6 +1200,12 @@ def _extract_tool_summary(tc: dict[str, Any], fallback_status: str) -> dict[str,
         or _clean_scalar_str(args.get("AbsolutePath"))
         or _clean_scalar_str(args.get("CommandLine"))
         or _clean_scalar_str(args.get("SearchPath"))
+        or _clean_scalar_str(args.get("DirectoryPath"))
+        or _clean_scalar_str(args.get("NotebookPath"))
+        or _clean_scalar_str(args.get("Url"))
+        or _clean_scalar_str(args.get("Pattern"))
+        or _clean_scalar_str(args.get("Query"))
+        or _clean_scalar_str(args.get("query"))
         or ""
     )
     status = _clean_scalar_str(tc.get("status")) or fallback_status
@@ -743,7 +1226,10 @@ def _clean_scalar_str(val: Any) -> str:
     if val is None:
         return ""
     text = str(val).strip()
-    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+    if len(text) >= 2 and (
+        (text.startswith('"') and text.endswith('"'))
+        or (text.startswith("'") and text.endswith("'"))
+    ):
         return text[1:-1].strip()
     return text
 

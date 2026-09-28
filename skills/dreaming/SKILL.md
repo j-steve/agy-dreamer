@@ -81,14 +81,18 @@ Master procedural runbook for extracting durable domain invariants, user axioms,
 
 ---
 
-### Step 2: Stream Compact Transcripts (Payload Stripping)
+### Step 2: Stream Compact Transcripts (Payload Stripping & Watermark Partitioning)
 
-1. For each qualifying session ID, locate and read `brain/<session_id>/.system_generated/logs/transcript.jsonl` using `extract_compact_transcript`.
-2. Extract high-signal conversational turns:
+1. For each qualifying session ID, locate and read `brain/<session_id>/.system_generated/logs/transcript.jsonl` using `extract_compact_transcript(session_id, watermark=last_consolidated_timestamp, prior_context_turns=4)`.
+2. Extract high-signal conversational turns and parse literal `created_at` ISO timestamps on each user and agent turn:
    - `type == 'USER_INPUT'`: User instructions, architectural requirements, feedback, corrections, and explicit preferences.
    - `type == 'PLANNER_RESPONSE'`: Agent thinking traces, formulated plans, and architectural rationale.
    - `tool_calls` summary metadata: Tool names and concise summaries (`toolAction`, `toolSummary`).
-3. **Multi-MB Payload Stripping Invariant**:
+3. **Partitioned Transcript Utilization**:
+   - Utilize `transcript.render_partitioned_markdown()` to obtain a clean, structured Markdown transcript partitioned into:
+     - `### Prior Context`: Historical turns on or before the watermark (`created_at <= watermark`), strictly bounded to the most recent `prior_context_turns` (default 4) to eliminate token bloat.
+     - `### New Activity`: Recent turns occurring strictly after the watermark (`created_at > watermark`).
+4. **Multi-MB Payload Stripping Invariant**:
    - Explicitly discard raw tool output blocks (`type == 'GENERIC'`), large stdout/stderr streams, compiler diffs, image bytes, and code contents exceeding 1 KB.
    - Reduce multi-megabyte raw execution logs to compact (<30 KB) intent and decision records.
 
@@ -113,6 +117,11 @@ Evaluate candidate signals against the 4-Tier Epistemic Classification Model:
 | **Tier 3** | **Environment Realities** | Host system idiosyncrasies, OS shell quirks, runtime version boundaries, tool defects | `memories/guardrails.md` | Max 50 lines |
 | **Tier 4** | **Transient Operational Noise** | Ephemeral debugging flags, temporary workarounds, single-task work items | **DISCARDED** | 0 lines |
 
+#### Partitioned Context Distillation Rules:
+- **Restrict Active Distillation Strictly to `### New Activity`**: Invariant discovery, candidate rule extraction, and rule modifications must be derived strictly from turns within the `### New Activity` section.
+- **`### Prior Context` Strictly for Reference & Grounding**: The `### Prior Context` section must be used solely for background context, pronoun resolution (e.g. resolving what "it" or "that service" refers to), and conversational grounding. NEVER extract new invariants or update timestamps based on turns in `### Prior Context`.
+- **Preserve Untouched Existing Invariants**: Existing invariants in active memory files that were not reaffirmed or modified in the `### New Activity` section MUST be preserved untouched. Do NOT delete or re-date existing invariants simply because the new activity did not mention them.
+
 #### Critical Rule on Tier 4 Semantic Filtering:
 - **Filtering is a SEMANTIC JUDGMENT, NOT a naive keyword blocklist.**
 - Do NOT reject signals simply because they contain colloquial words like *"today"*, *"for now"*, or *"temporarily"*. For example, *"I've been using mmap for now and it works great"* expresses a permanent architectural decision using casual phrasing.
@@ -136,7 +145,7 @@ Every Tier 2 project or domain invariant must be formatted according to the stan
 
 #### Field Standards:
 - `INVARIANT_KEY`: Unique hierarchical identifier in snake_case (e.g., `project_name.component_boundary`, `infrastructure.service_restart_guard`).
-- `LAST_CONFIRMED`: ISO date and short conversation ID where this invariant was verified or restated.
+- `LAST_CONFIRMED`: ISO date (`YYYY-MM-DD`) and short conversation ID where this invariant was verified or restated (e.g. `YYYY-MM-DD (Session: <session_id>)`). **Literal Timestamp Anchoring**: Strictly anchor this date to the literal turn date (`created_at`) from the transcript where the invariant was affirmed or stated. NEVER default to today's date or the consolidation execution date.
 - `SUPERSEDES`: Prior invariant key being deprecated (omitted if new invariant).
 - `Target`: The exact component, class, service, interface, or conceptual entity.
 - `Invariant`: Clear, imperative statement of what must be true.
@@ -216,7 +225,7 @@ Antigravity executes nightly dreaming via the background `schedule` tool:
 {
   "CronExpression": "0 3 * * *",
   "IsDaemon": true,
-  "Prompt": "You are the Antigravity Dreamer. Your mission is to consolidate conversation sessions into long-term memory using the dreaming skill. Follow these steps strictly:\n0. FIRST-RUN CHECK: Check if ~/.gemini/config/dreaming/.state.json exists and cold_start_completed is true. If false or missing, execute the cold-start backfill via scripts.cold_start across all historical root sessions, synthesize baseline memory files, write dreaming/index.md, record state, and commit.\n1. INCREMENTAL DISCOVERY: Query root sessions (nesting_depth == 0) in conversation_summaries.db modified since the watermark timestamp in dreaming/.state.json.\n2. TRANSCRIPT EXTRACTION: For each qualifying session, extract user turns and planner summaries using dream_helpers.py, skipping raw tool payloads.\n3. SYNTHESIS & CLASSIFICATION: Load dreaming/index.md and relevant domain files. Apply the 4-Tier Epistemic Classification and Keyed Invariant Schema. Discard transient operational noise using semantic judgment.\n4. CONTRADICTION & SUPERSESSION: Match existing INVARIANT_KEY tags. If technical decisions evolved, archive superseded rules to dreaming/archive/superseded.md.\n5. COMMIT OR STAGE: In Turbo Mode (default), auto-commit high-confidence (>= 0.9) invariants directly with atomic git commits in agy-core, and stage ambiguous items to dreaming/proposals/YYYY-MM-DD.md. In Standard Mode, stage all proposals.\n6. WATERMARK: Advance the watermark in dreaming/.state.json via atomic write. If there is nothing meaningful to consolidate, exit quietly."
+  "Prompt": "You are the Antigravity Dreamer. Your mission is to consolidate conversation sessions into long-term memory using the dreaming skill. Follow these steps strictly:\n0. FIRST-RUN CHECK: Check if ~/.gemini/config/dreaming/.state.json exists and cold_start_completed is true. If false or missing, execute the cold-start backfill via scripts.cold_start across all historical root sessions, synthesize baseline memory files, write dreaming/index.md, record state, and commit.\n1. INCREMENTAL DISCOVERY: Query root sessions (nesting_depth == 0) in conversation_summaries.db modified since the watermark timestamp in dreaming/.state.json.\n2. TRANSCRIPT EXTRACTION: For each qualifying session, extract partitioned turns using dream_helpers.py with watermark, distilling invariants strictly from New Activity while using Prior Context for reference.\n3. SYNTHESIS & CLASSIFICATION: Load dreaming/index.md and relevant domain files. Apply the 4-Tier Epistemic Classification and Keyed Invariant Schema. Discard transient operational noise using semantic judgment.\n4. CONTRADICTION & SUPERSESSION: Match existing INVARIANT_KEY tags. If technical decisions evolved, archive superseded rules to dreaming/archive/superseded.md.\n5. COMMIT OR STAGE: In Turbo Mode (default), auto-commit high-confidence (>= 0.9) invariants directly with atomic git commits in agy-core, and stage ambiguous items to dreaming/proposals/YYYY-MM-DD.md. In Standard Mode, stage all proposals.\n6. WATERMARK: Advance the watermark in dreaming/.state.json via atomic write. If there is nothing meaningful to consolidate, exit quietly."
 }
 ```
 
@@ -228,3 +237,5 @@ Antigravity executes nightly dreaming via the background `schedule` tool:
 2. **Safe SQLite Access**: Always open `conversation_summaries.db` in read-only mode (`?mode=ro`). Never attempt write operations against the Antigravity runtime database.
 3. **Resilience to Corrupted Logs**: Missing sessions, broken JSONL lines, or empty files must be logged and bypassed without halting consolidation.
 4. **Clean Rollbacks**: Every change committed in Turbo Mode must be an atomic git commit in `agy-core` so any modification can be cleanly reverted with `git revert`.
+5. **Turn-Level Watermark Partitioning**: Incremental consolidation must always pass the state watermark and bound historical context. Invariant extraction must operate exclusively on `### New Activity`, while `### Prior Context` provides bounded reference without generating rules.
+6. **Literal Turn Date Anchoring**: `<!-- LAST_CONFIRMED: YYYY-MM-DD -->` must strictly match the literal `created_at` date of the turn where the invariant was affirmed. Never smudge timestamps to today's execution date.

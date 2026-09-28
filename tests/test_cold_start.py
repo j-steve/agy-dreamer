@@ -81,9 +81,7 @@ def test_stage1_fast_map_nominal() -> None:
         _create_session(
             "s2",
             "Sample Alpha Pipeline",
-            workspace_uris=[
-                "file:///c%3A/Projects/sample-alpha"
-            ],
+            workspace_uris=["file:///c%3A/Projects/sample-alpha"],
         ),
         _create_session(
             "s3",
@@ -125,9 +123,7 @@ def test_stage1_fast_map_custom_workspace() -> None:
     session = _create_session(
         "s_custom",
         "Custom Tooling",
-        workspace_uris=[
-            "file:///c%3A/Projects/my-custom-engine"
-        ],
+        workspace_uris=["file:///c%3A/Projects/my-custom-engine"],
     )
     anchored_map, unanchored_sessions = run_stage1_fast_map([session])
 
@@ -276,9 +272,7 @@ def test_stage3_cluster_structure_and_manifest() -> None:
             _create_session(
                 "s_alpha",
                 "Alpha Pipeline",
-                workspace_uris=[
-                    "file:///c%3A/Projects/sample-project-alpha"
-                ],
+                workspace_uris=["file:///c%3A/Projects/sample-project-alpha"],
             )
         ],
         "service-beta": [
@@ -349,10 +343,7 @@ def test_stage3_cluster_structure_and_manifest() -> None:
         in manifest_content
     )
     assert "- `memories/service-beta.md`:" in manifest_content
-    assert (
-        "  - Workspace: `file:///c%3A/Projects/service-beta`"
-        in manifest_content
-    )
+    assert "  - Workspace: `file:///c%3A/Projects/service-beta`" in manifest_content
 
 
 def test_generate_cold_start_catalog() -> None:
@@ -393,7 +384,9 @@ def test_generate_cold_start_catalog() -> None:
     assert "- **Engineering Projects**: 1" in catalog
     assert "#### `memories/alice.md` — Alice" in catalog
     assert "- **Supporting Sessions**: 2 sessions" in catalog
-    assert "#### `memories/devops-infrastructure.md` — DevOps & Infrastructure" in catalog
+    assert (
+        "#### `memories/devops-infrastructure.md` — DevOps & Infrastructure" in catalog
+    )
     assert "#### `memories/service-beta.md` — Service Beta" in catalog
     assert manifest in catalog
 
