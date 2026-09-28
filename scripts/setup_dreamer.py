@@ -219,6 +219,9 @@ def setup_dreamer(
     if bootstrap:
         print("\n[5/5] Running immediate cold-start historical bootstrapping...")
         try:
+            plugin_root = Path(__file__).resolve().parent.parent
+            if str(plugin_root) not in sys.path:
+                sys.path.insert(0, str(plugin_root))
             from scripts.cold_start import bootstrap_cold_start
 
             db_path = (
@@ -227,12 +230,12 @@ def setup_dreamer(
             if db_path.exists():
                 summary = bootstrap_cold_start(
                     db_path=db_path,
-                    config_dir=config_dir,
+                    output_memory_dir=dreaming_dir,
                     force=False,
                     dry_run=False,
                 )
                 print(
-                    f"  [+] Bootstrapped {summary.get('clusters_formed', 0)} memory files across {summary.get('total_sessions_mapped', 0)} sessions."
+                    f"  [+] Bootstrapped {len(summary.get('created_files', []))} memory files across {summary.get('total_sessions', 0)} root sessions."
                 )
             else:
                 print(
