@@ -1,0 +1,20 @@
+{
+  "name": "agy-dreamer",
+  "version": "0.1.0",
+  "description": "Autonomous, long-term memory consolidation engine for Google Antigravity. Distills conversation transcripts into durable domain invariants and maintains an on-demand memory manifest.",
+  "author": {
+    "name": "j-steve",
+    "url": "https://github.com/j-steve"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/j-steve/agy-dreamer",
+  "keywords": [
+    "antigravity",
+    "plugin",
+    "memory",
+    "dreaming",
+    "consolidation",
+    "agent-memory",
+    "long-term-memory"
+  ]
+}
