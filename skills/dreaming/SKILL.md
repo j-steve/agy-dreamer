@@ -102,7 +102,8 @@ Master procedural runbook for extracting durable domain invariants, user axioms,
 
 1. Read the Master Manifest `dreaming/index.md` via `view_file` to inspect registered domains, people, project workspace URIs, and trigger aliases.
 2. Read active memory files related to the sessions being analyzed (e.g. `dreaming/memories/<slug>.md`, `dreaming/memories/preferences.md`, `dreaming/memories/guardrails.md`).
-3. Note current file line counts to ensure additions will not breach per-file line ceilings.
+3. Read `~/.gemini/config/AGENTS.md` via `view_file` to load the active global agent constitution and rules.
+4. Note current file line counts to ensure additions will not breach per-file line ceilings.
 
 ---
 
@@ -183,12 +184,45 @@ When an extracted candidate invariant conflicts with or updates an existing rule
 
 ---
 
+### Step 7b: Global Rule Deduplication & Constitutional Amendment Gate (AGENTS.md)
+
+1. **Deduplication against `AGENTS.md`**:
+   - Compare all candidate invariants against `~/.gemini/config/AGENTS.md`.
+   - If an invariant is already explicitly codified or enforced by an existing global rule in `AGENTS.md` (e.g. Git Task Completion, PowerShell Execution Safety, The Stranger Test, Skill Dispatch), **DISCARD IT IMMEDIATELY**.
+   - Do NOT duplicate global rules into `memories/preferences.md` or `memories/guardrails.md`.
+
+2. **Constitutional Amendment Proposal Gate (Strict Human-in-the-Loop)**:
+   - If transcript evidence reveals that a technical decision, user correction, or environment reality **refines, contradicts, or deprecates** an active rule in `AGENTS.md`, or introduces a new universal operational constraint:
+     - **STRICT COGNITIVE PROHIBITION**: The Dreamer MUST NEVER autonomously edit or auto-commit changes to `~/.gemini/config/AGENTS.md`, even in Turbo Mode. `AGENTS.md` is the global system constitution.
+     - **STAGE FORMAL PROPOSAL**: Create a structured proposal file in `~/.gemini/config/dreaming/proposals/YYYY-MM-DD-agents-md.md`:
+       ```markdown
+       # AGENTS.md Constitutional Amendment Proposal
+       - **Target File**: `~/.gemini/config/AGENTS.md`
+       - **Session Evidence**: Session `<session_id>` (Turn <step_index>, <literal_created_at>)
+       - **Rationale**: `<concise_explanation_of_why_user_or_system_evolved>`
+       - **Status**: PENDING_HUMAN_APPROVAL
+
+       ### Proposed Diff:
+       ```diff
+       --- a/AGENTS.md
+       +++ b/AGENTS.md
+       @@ ... @@
+       - <old_rule_line>
+       + <new_refined_rule_line>
+       ```
+       ```
+     - **MORNING SUMMARY REPORT**: In the morning summary card, prominently report:
+       `"⚠️ Constitutional Amendment Staged: AGENTS.md update proposed from Session <session_id>. Requires human review before applying."`
+
+---
+
 ### Step 8: Execution Mode (Turbo Mode vs Standard Mode)
 
 Read `turbo_mode` from `dreaming/.state.json` (defaults to `true`):
 
 #### 1. Turbo Mode (`turbo_mode: true` — Autonomous Execution):
 - **Confidence Gating ($\ge 0.9$)**: Candidate invariants with high confidence ($\ge 0.9$) and clear evidentiary backing are auto-committed directly to target memory files.
+- **Constitutional Immunity**: `~/.gemini/config/AGENTS.md` is strictly immune to Turbo Mode auto-commits. Any amendment touching `AGENTS.md` MUST be staged to `proposals/` for human approval regardless of confidence score.
 - **Ambiguity Staging ($< 0.9$)**: Borderline or ambiguous candidates are staged to `dreaming/proposals/YYYY-MM-DD.md` for human review.
 - **Line Budget Enforcement**: Verify file length before committing. If adding an invariant would exceed the line ceiling (1,000 lines per file), **refuse auto-commit** and stage a compaction proposal in `dreaming/proposals/YYYY-MM-DD.md`.
 - **Atomic Git Commits in `agy-core`**:
@@ -198,7 +232,7 @@ Read `turbo_mode` from `dreaming/.state.json` (defaults to `true`):
     ```
   - Enables instant one-command rollbacks: `git revert <sha>`.
 - **Non-Blocking Morning Summary**: At the start of the next morning session, report:
-  `"Overnight Dream: Auto-committed N invariants to <slug>.md. Run git log -3 dreaming/ to review."`
+  `"Overnight Dream: Auto-committed N invariants to <slug>.md. Run git log -3 dreaming/ to review."` (and highlight any pending `AGENTS.md` proposals).
 
 #### 2. Standard Mode (`turbo_mode: false` — Human-in-the-Loop):
 - Stage all candidate additions, modifications, and supersessions to `dreaming/proposals/YYYY-MM-DD.md`.
