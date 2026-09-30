@@ -363,8 +363,9 @@ class TestRulesCompliance:
             "Missing Zero Repository Pollution guardrail."
         )
         assert "~/.gemini/config/memory/" in content or "agy-core" in content
-        assert "30 lines" in content, "Missing 30 lines ceiling for core preferences."
-        assert "50 lines" in content, "Missing 50 lines ceiling for guardrails/domains."
+        assert "1,000 lines" in content or "1000 lines" in content, (
+            "Missing 1,000 lines ceiling for memory files."
+        )
 
 
 # ============================================================================

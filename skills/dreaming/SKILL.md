@@ -112,9 +112,9 @@ Evaluate candidate signals against the 4-Tier Epistemic Classification Model:
 
 | Tier | Epistemic Class | Signal Criteria | Destination File | Line Budget |
 | :--- | :--- | :--- | :--- | :--- |
-| **Tier 1** | **User Interaction Axioms** | Explicit corrections on communication tone, depth, persona, problem-solving posture | `memories/preferences.md` | Max 30 lines |
-| **Tier 2** | **Project & Domain Invariants** | Architectural boundaries, non-negotiable data models, negative constraints, hardware bindings | `memories/<slug>.md` | Max 50 lines per file |
-| **Tier 3** | **Environment Realities** | Host system idiosyncrasies, OS shell quirks, runtime version boundaries, tool defects | `memories/guardrails.md` | Max 50 lines |
+| **Tier 1** | **User Interaction Axioms** | Explicit corrections on communication tone, depth, persona, problem-solving posture | `memories/preferences.md` | Max 1,000 lines |
+| **Tier 2** | **Project & Domain Invariants** | Architectural boundaries, non-negotiable data models, negative constraints, hardware bindings | `memories/<slug>.md` | Max 1,000 lines per file |
+| **Tier 3** | **Environment Realities** | Host system idiosyncrasies, OS shell quirks, runtime version boundaries, tool defects | `memories/guardrails.md` | Max 1,000 lines |
 | **Tier 4** | **Transient Operational Noise** | Ephemeral debugging flags, temporary workarounds, single-task work items | **DISCARDED** | 0 lines |
 
 #### Partitioned Context Distillation Rules:
@@ -190,7 +190,7 @@ Read `turbo_mode` from `dreaming/.state.json` (defaults to `true`):
 #### 1. Turbo Mode (`turbo_mode: true` — Autonomous Execution):
 - **Confidence Gating ($\ge 0.9$)**: Candidate invariants with high confidence ($\ge 0.9$) and clear evidentiary backing are auto-committed directly to target memory files.
 - **Ambiguity Staging ($< 0.9$)**: Borderline or ambiguous candidates are staged to `dreaming/proposals/YYYY-MM-DD.md` for human review.
-- **Line Budget Enforcement**: Verify file length before committing. If adding an invariant would exceed the line ceiling (30 lines for `preferences.md`, 50 lines for domains/projects), **refuse auto-commit** and stage a compaction proposal in `dreaming/proposals/YYYY-MM-DD.md`.
+- **Line Budget Enforcement**: Verify file length before committing. If adding an invariant would exceed the line ceiling (1,000 lines per file), **refuse auto-commit** and stage a compaction proposal in `dreaming/proposals/YYYY-MM-DD.md`.
 - **Atomic Git Commits in `agy-core`**:
   - Execute a clean, atomic conventional commit in `~/.gemini/config/` for each consolidated domain:
     ```bash

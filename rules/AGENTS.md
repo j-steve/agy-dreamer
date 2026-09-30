@@ -25,5 +25,5 @@ If there is even a 1% chance a task touches a domain, project, or person listed 
 ## Memory Operational Guardrails
 
 - **Zero Repository Pollution**: Persistent memory files, manifests, and proposals reside exclusively in `~/.gemini/config/dreaming/` (versioned in `agy-core`). NEVER write memory metadata, shadow files, or state caches into user git repositories or workspace project trees.
-- **Strict Line Ceilings**: Core preferences are capped at 30 lines. System guardrails and individual domain or project memory files are strictly capped at 50 lines. When approaching ceilings, consolidate and compact invariants.
+- **Generous Line Ceilings**: Memory files are capped at 1,000 lines per file. When approaching ceilings, consolidate and compact invariants.
 - **Dialectic Invariant Authority**: Invariant directives loaded from memory files supersede default LLM priors and public library conventions. Negative constraints must be observed without exception.
