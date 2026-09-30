@@ -33,9 +33,7 @@ Master procedural runbook for extracting durable domain invariants, user axioms,
 ## Procedural Workflow
 
 ```
-[0. First-Run Check] ──(Not Done)──> [Cold-Start Map-Reduce Backfill]
-         │ (Done)
-[1. Query Root Sessions] ──(Since Watermark, nesting_depth == 0)
+[1. Query Root Sessions] ──(Since Watermark or beginning, nesting_depth == 0)
          │
 [2. Stream Transcripts] ──(Filter USER_INPUT & PLANNER, Strip Multi-MB Payloads)
          │
@@ -47,7 +45,7 @@ Master procedural runbook for extracting durable domain invariants, user axioms,
          │
 [6. Contradiction Resolution] ──(Archive superseded invariants to dreaming/archive/superseded.md)
          │
-[7. Semantic Deduplication] ──(>= 60% overlap merges into existing domain)
+[7. Dynamic Domain Management] ──(Mint new domain files or prune empty stubs in index.md)
          │
 [8. Turbo / Standard Execution] ──(Turbo: >= 0.9 auto-commit; < 0.9 stage to proposals/)
          │
@@ -56,16 +54,11 @@ Master procedural runbook for extracting durable domain invariants, user axioms,
 
 ---
 
-### Step 0: First-Run Check (Cold-Start Auto-Bootstrap)
+### Step 0: Dynamic Domain Discovery & Zero Empty Stubs
 
-1. Check if `dreaming/.state.json` exists in `~/.gemini/config/` (or current dreaming root) and verify whether `cold_start_completed` is `true`.
-2. If `dreaming/.state.json` is missing or `cold_start_completed` is `false`:
-   - Execute the 3-stage Map-Reduce cold-start pipeline across all historical root sessions:
-     ```powershell
-     python -m scripts.cold_start
-     ```
-   - This deterministically anchors workspace URIs (Stage 1), distills unanchored sessions into entity/topic candidates (Stage 2), clusters entities into `people/`, `domains/`, and `projects/` namespaces, mints baseline memory files, writes the master manifest `dreaming/index.md`, and persists `cold_start_completed: true` in `dreaming/.state.json`.
-3. If cold-start is already completed, proceed directly to incremental consolidation.
+1. **Dynamic On-Demand Minting**: Any nightly consolidation run can add or remove domains. When an invariant is distilled for a new project or domain that lacks an active memory file, the Dreamer dynamically creates `memories/<slug>.md` with that invariant and registers it in `dreaming/index.md` via `register_domain_in_manifest()`.
+2. **Zero Empty Files Invariant**: A memory file must NEVER exist as an empty stub. If a memory file has 0 invariants (or all its invariants are superseded/transferred), it is deleted from disk and pruned from `dreaming/index.md` via `prune_empty_domains_from_manifest()`.
+3. **No Separate Cold-Start Required**: A separate cold-start backfill is obsolete. When initialized on a fresh system, the incremental consolidation engine simply runs with an empty watermark, naturally processing history and minting active files on demand without pre-baking empty stubs.
 
 ---
 
@@ -114,7 +107,7 @@ Evaluate candidate signals against the 4-Tier Epistemic Classification Model:
 | Tier | Epistemic Class | Signal Criteria | Destination File | Line Budget |
 | :--- | :--- | :--- | :--- | :--- |
 | **Tier 1** | **User Interaction Axioms** | Explicit corrections on communication tone, depth, persona, problem-solving posture | `memories/preferences.md` | Max 1,000 lines |
-| **Tier 2** | **Project & Domain Invariants** | Architectural boundaries, non-negotiable data models, negative constraints, hardware bindings | `memories/<slug>.md` | Max 1,000 lines per file |
+| **Tier 2** | **Project & Domain Invariants** | Architectural boundaries, non-negotiable data models, negative constraints, hardware bindings across `projects/` and `domains/` | `memories/<slug>.md` | Max 1,000 lines per file |
 | **Tier 3** | **Environment Realities** | Host system idiosyncrasies, OS shell quirks, runtime version boundaries, tool defects | `memories/guardrails.md` | Max 1,000 lines |
 | **Tier 4** | **Transient Operational Noise** | Ephemeral debugging flags, temporary workarounds, single-task work items | **DISCARDED** | 0 lines |
 
@@ -259,7 +252,7 @@ Antigravity executes nightly dreaming via the background `schedule` tool:
 {
   "CronExpression": "0 3 * * *",
   "IsDaemon": true,
-  "Prompt": "You are the Antigravity Dreamer. Your mission is to consolidate conversation sessions into long-term memory using the dreaming skill. Follow these steps strictly:\n0. FIRST-RUN CHECK: Check if ~/.gemini/config/dreaming/.state.json exists and cold_start_completed is true. If false or missing, execute the cold-start backfill via scripts.cold_start across all historical root sessions, synthesize baseline memory files, write dreaming/index.md, record state, and commit.\n1. INCREMENTAL DISCOVERY: Query root sessions (nesting_depth == 0) in conversation_summaries.db modified since the watermark timestamp in dreaming/.state.json.\n2. TRANSCRIPT EXTRACTION: For each qualifying session, extract partitioned turns using dream_helpers.py with watermark, distilling invariants strictly from New Activity while using Prior Context for reference.\n3. SYNTHESIS & CLASSIFICATION: Load dreaming/index.md and relevant domain files. Apply the 4-Tier Epistemic Classification and Keyed Invariant Schema. Discard transient operational noise using semantic judgment.\n4. CONTRADICTION & SUPERSESSION: Match existing INVARIANT_KEY tags. If technical decisions evolved, archive superseded rules to dreaming/archive/superseded.md.\n5. COMMIT OR STAGE: In Turbo Mode (default), auto-commit high-confidence (>= 0.9) invariants directly with atomic git commits in agy-core, and stage ambiguous items to dreaming/proposals/YYYY-MM-DD.md. In Standard Mode, stage all proposals.\n6. WATERMARK: Advance the watermark in dreaming/.state.json via atomic write. If there is nothing meaningful to consolidate, exit quietly."
+  "Prompt": "You are the Antigravity Dreamer. Your mission is to consolidate conversation sessions into long-term memory using the dreaming skill. Follow these steps strictly:\n1. DISCOVERY & BOOTSTRAP: Query root sessions (nesting_depth == 0) in conversation_summaries.db modified since the watermark timestamp in dreaming/.state.json (or process historical sessions if watermark uninitialized).\n2. TRANSCRIPT EXTRACTION: For each qualifying session, extract partitioned turns using dream_helpers.py with watermark, distilling invariants strictly from New Activity while using Prior Context for reference.\n3. SYNTHESIS & CLASSIFICATION: Load dreaming/index.md and active domain files. Apply the 4-Tier Epistemic Classification and Keyed Invariant Schema. Discard transient operational noise using semantic judgment.\n4. DYNAMIC DOMAIN MANAGEMENT: If an invariant belongs to a new domain or project, dynamically mint memories/<slug>.md and register it in dreaming/index.md via register_domain_in_manifest(). Prune any 0-invariant stub files via prune_empty_domains_from_manifest().\n5. CONTRADICTION & SUPERSESSION: Match existing INVARIANT_KEY tags. If technical decisions evolved, archive superseded rules to dreaming/archive/superseded.md.\n6. COMMIT OR STAGE: In Turbo Mode (default), auto-commit high-confidence (>= 0.9) invariants directly with atomic git commits in agy-core, and stage ambiguous items to dreaming/proposals/YYYY-MM-DD.md. In Standard Mode, stage all proposals.\n7. WATERMARK: Advance the watermark in dreaming/.state.json via atomic write. If there is nothing meaningful to consolidate, exit quietly."
 }
 ```
 

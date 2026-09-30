@@ -878,35 +878,44 @@ def _write_all_cold_start_files(
     manifest_content: str,
     catalog_content: str,
 ) -> None:
-    """Writes all baseline memory files and subdirectories to the target directory."""
+    """Writes baseline memory files and subdirectories, preserving existing files."""
     for sub in ("memories", "proposals", "archive"):
         (output_dir / sub).mkdir(parents=True, exist_ok=True)
 
-    _write_text_file(output_dir / "index.md", manifest_content)
-    _write_text_file(output_dir / "cold_start_catalog.md", catalog_content)
+    _write_text_file(output_dir / "index.md", manifest_content, overwrite=False)
+    _write_text_file(output_dir / "cold_start_catalog.md", catalog_content, overwrite=False)
     _write_text_file(
-        output_dir / "memories" / "preferences.md", _build_core_preferences_content()
+        output_dir / "memories" / "preferences.md",
+        _build_core_preferences_content(),
+        overwrite=False,
     )
     _write_text_file(
-        output_dir / "memories" / "guardrails.md", _build_core_guardrails_content()
+        output_dir / "memories" / "guardrails.md",
+        _build_core_guardrails_content(),
+        overwrite=False,
     )
 
     for item in clusters.get("people", {}).values():
         content = _build_person_file_content(item)
-        _write_text_file(output_dir / "memories" / item["file"], content)
+        _write_text_file(output_dir / "memories" / item["file"], content, overwrite=False)
 
     for item in clusters.get("domains", {}).values():
         content = _build_domain_file_content(item)
-        _write_text_file(output_dir / "memories" / item["file"], content)
+        _write_text_file(output_dir / "memories" / item["file"], content, overwrite=False)
 
     for item in clusters.get("projects", {}).values():
         content = _build_project_file_content(item)
-        _write_text_file(output_dir / "memories" / item["file"], content)
+        _write_text_file(output_dir / "memories" / item["file"], content, overwrite=False)
 
 
-def _write_text_file(file_path: Path, content: str) -> None:
-    """Writes text content to a file with UTF-8 encoding."""
+def _write_text_file(file_path: Path, content: str, overwrite: bool = True) -> None:
+    """Writes text content to a file with UTF-8 encoding.
+
+    If overwrite is False and file already exists, it is preserved untouched.
+    """
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    if not overwrite and file_path.exists():
+        return
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
 

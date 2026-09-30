@@ -38,10 +38,11 @@ from urllib.parse import unquote
 DEFAULT_CRON = "0 3 * * *"
 
 DEFAULT_PROMPT = """Execute the dreaming skill to consolidate memories into agy-core:
-1. Check if cold-start is needed in dreaming/.state.json; if so, bootstrap baseline memories.
-2. Otherwise, scan root sessions modified since the watermark timestamp.
-3. Extract invariants using the 4-tier epistemic rubric and auto-commit in Turbo Mode (>= 0.9 confidence).
-4. Display a clean morning summary card in chat of all changes made. If no new sessions exist, report "No new sessions to consolidate" and finish."""
+1. Scan root sessions modified since the watermark timestamp in dreaming/.state.json (or process historical sessions if uninitialized).
+2. Load context from dreaming/index.md, active domain memories, and ~/.gemini/config/AGENTS.md.
+3. Extract invariants using the 4-tier epistemic rubric; dynamically mint new domain files in dreaming/index.md when invariants are found, and prune any 0-invariant stub files.
+4. Auto-commit project/domain invariants in Turbo Mode (>= 0.9 confidence).
+5. Display a clean morning summary card in chat of all changes made. If no new sessions exist, report "No new sessions to consolidate" and finish."""
 
 
 if hasattr(sys.stdout, "reconfigure"):

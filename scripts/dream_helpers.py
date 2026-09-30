@@ -1483,3 +1483,157 @@ def list_active_memory_files(
 
 # Alias for compatibility with survey report
 parse_keyed_invariants = scan_keyed_invariants
+
+
+def register_domain_in_manifest(
+    manifest_path: str | Path,
+    slug: str,
+    workspace_uri: str = "",
+    aliases: list[str] | None = None,
+    category: str = "projects",
+) -> bool:
+    """Dynamically registers a domain or project in dreaming/index.md.
+
+    Inserts the new entry under the appropriate section if not already present.
+
+    Args:
+        manifest_path: Path to index.md manifest file.
+        slug: Domain or project slug (e.g. 'bellhop' or 'home-assistant').
+        workspace_uri: Optional file:/// URI for engineering projects.
+        aliases: Optional list of alias strings.
+        category: 'projects', 'domains', or 'people'.
+
+    Returns:
+        True if manifest was modified, False if already registered or error.
+    """
+    path = Path(manifest_path)
+    if not path.is_file():
+        return False
+
+    content = path.read_text(encoding="utf-8")
+    file_name = f"{slug}.md" if not slug.endswith(".md") else slug
+    target_rel = f"memories/{file_name}"
+
+    if target_rel in content:
+        return False
+
+    clean_aliases = aliases or [slug.replace("-", " ").title(), slug]
+    aliases_str = ", ".join(clean_aliases)
+
+    lines = content.splitlines()
+
+    if category == "projects":
+        section_header = "### Engineering Projects (`memories/`)"
+        new_entry = [
+            f"- `{target_rel}`:",
+            f"  - Workspace: `{workspace_uri}`",
+            f"  - Aliases: [{aliases_str}]",
+        ]
+    elif category == "people":
+        section_header = "### People & Collaborators (`memories/`)"
+        new_entry = [f"- `{target_rel}`: [{aliases_str}]"]
+    else:
+        section_header = "### Life Domains & Infrastructure (`memories/`)"
+        new_entry = [f"- `{target_rel}`: [{aliases_str}]"]
+
+    found_idx = -1
+    for idx, line in enumerate(lines):
+        if section_header in line:
+            found_idx = idx
+            break
+
+    if found_idx != -1:
+        lines.insert(found_idx + 1, "\n".join(new_entry))
+    else:
+        lines.extend(["", section_header] + new_entry)
+
+    path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+    return True
+
+
+def prune_empty_domains_from_manifest(
+    manifest_path: str | Path,
+    memories_dir: str | Path,
+) -> list[str]:
+    """Prunes empty memory files and unreferenced stub domains from index.md.
+
+    Scans memories/ directory and removes any domain or project markdown file
+    that has 0 keyed invariants (excluding core preferences.md and guardrails.md).
+    Then prunes manifest entries matching the removed files.
+
+    Args:
+        manifest_path: Path to dreaming/index.md.
+        memories_dir: Path to dreaming/memories/ directory.
+
+    Returns:
+        List of pruned file names.
+    """
+    m_path = Path(manifest_path)
+    mem_dir = Path(memories_dir)
+    if not m_path.is_file() or not mem_dir.is_dir():
+        return []
+
+    removed_files: list[str] = []
+
+    # 1. Inspect all files in memories_dir
+    core_files = {"preferences.md", "guardrails.md"}
+    active_files: set[str] = set()
+
+    for item in mem_dir.glob("*.md"):
+        if item.name in core_files:
+            active_files.add(item.name)
+            continue
+        try:
+            text = item.read_text(encoding="utf-8")
+            invariants = scan_keyed_invariants(text)
+            if len(invariants) == 0:
+                item.unlink()
+                removed_files.append(item.name)
+            else:
+                active_files.add(item.name)
+        except Exception:
+            active_files.add(item.name)
+
+    # 2. Prune manifest entries for any file not in active_files
+    content = m_path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    new_lines: list[str] = []
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        # Match project block: - `memories/<file>.md`:
+        match_proj = re.match(r"^-\s*`memories/([^`]+)`\s*:\s*$", line)
+        if match_proj:
+            fname = match_proj.group(1).strip()
+            sublines: list[str] = []
+            j = i + 1
+            while j < len(lines) and (lines[j].startswith("  ") or lines[j].startswith("\t")):
+                sublines.append(lines[j])
+                j += 1
+            if fname not in active_files:
+                if fname not in removed_files:
+                    removed_files.append(fname)
+            else:
+                new_lines.append(line)
+                new_lines.extend(sublines)
+            i = j
+            continue
+
+        # Match single-line domain or person: - `memories/<file>.md`: [...]
+        match_dom = re.match(r"^-\s*`memories/([^`]+)`\s*:\s*\[(.*?)\]", line)
+        if match_dom:
+            fname = match_dom.group(1).strip()
+            if fname not in active_files:
+                if fname not in removed_files:
+                    removed_files.append(fname)
+            else:
+                new_lines.append(line)
+            i += 1
+            continue
+
+        new_lines.append(line)
+        i += 1
+
+    m_path.write_text("\n".join(new_lines).strip() + "\n", encoding="utf-8")
+    return removed_files
