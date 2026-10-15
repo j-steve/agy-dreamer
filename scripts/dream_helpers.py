@@ -39,6 +39,7 @@ from typing import Any
 # ============================================================================
 
 _DEFAULT_BUSY_TIMEOUT_MS: int = 5000
+_DEFAULT_DEEP_DREAM_INTERVAL_DAYS: int = 7
 _DEFAULT_MAX_THOUGHT_CHARS: int = 2000
 _DEFAULT_MIN_STEP_COUNT: int = 1
 _DEFAULT_PRIOR_CONTEXT_TURNS: int = 4
@@ -327,6 +328,7 @@ class DreamState:
         schema_version: State schema version number.
         cold_start_timestamp: Timestamp when cold start bootstrapping completed.
         last_dream_timestamp: Timestamp of the most recent incremental dream cycle.
+        last_deep_dream_timestamp: Timestamp of the most recent weekly deep dream audit.
         watermark_last_modified_time: Alias for last_consolidated_timestamp.
         last_run_mode: Execution mode ('turbo' or 'standard').
         stats: Aggregated metrics tracking extraction counts.
@@ -339,6 +341,7 @@ class DreamState:
     schema_version: int = 1
     cold_start_timestamp: str | None = None
     last_dream_timestamp: str | None = None
+    last_deep_dream_timestamp: str | None = None
     watermark_last_modified_time: str | None = None
     last_run_mode: str = "turbo"
     stats: dict[str, int] = field(
@@ -1274,6 +1277,7 @@ def load_state(state_file: str | Path = DEFAULT_STATE_FILE) -> DreamState:
         ]
         cold_start_ts = data.get("cold_start_timestamp")
         last_dream_ts = data.get("last_dream_timestamp")
+        last_deep_ts = data.get("last_deep_dream_timestamp")
         watermark = data.get("watermark_last_modified_time") or (
             last_ts if last_ts else None
         )
@@ -1288,6 +1292,7 @@ def load_state(state_file: str | Path = DEFAULT_STATE_FILE) -> DreamState:
             schema_version=version,
             cold_start_timestamp=str(cold_start_ts) if cold_start_ts else None,
             last_dream_timestamp=str(last_dream_ts) if last_dream_ts else None,
+            last_deep_dream_timestamp=str(last_deep_ts) if last_deep_ts else None,
             watermark_last_modified_time=str(watermark) if watermark else None,
             last_run_mode=mode,
             stats=stats,
@@ -1359,6 +1364,69 @@ def update_state_watermark(
             existing.add(clean_sid)
     if processed_ids:
         state.last_consolidated_session_id = str(processed_ids[-1]).strip()
+    save_state_atomic(state, state_file)
+    return state
+
+
+def is_deep_dream_due(
+    state: DreamState,
+    now: str | datetime | date | None = None,
+    interval_days: int = _DEFAULT_DEEP_DREAM_INTERVAL_DAYS,
+) -> bool:
+    """Determines whether a weekly Deep Dream architectural audit pass is due.
+
+    Requires both that at least `interval_days` have elapsed since
+    `last_deep_dream_timestamp` (or that no deep dream has run yet) AND that
+    new sessions have been consolidated since the last deep dream
+    (`last_consolidated_timestamp > last_deep_dream_timestamp`), preventing
+    redundant audits when the user has been away with zero new activity.
+
+    Args:
+        state: Active DreamState instance.
+        now: Optional current reference time (defaults to UTC now).
+        interval_days: Minimum days between deep dream runs (default 7).
+
+    Returns:
+        True if a Deep Dream pass should be triggered, False otherwise.
+    """
+    consolidated_dt = _normalize_watermark_datetime(state.last_consolidated_timestamp)
+    if consolidated_dt is None:
+        return False
+
+    last_deep_dt = _normalize_watermark_datetime(state.last_deep_dream_timestamp)
+    if last_deep_dt is None:
+        return True
+
+    if consolidated_dt <= last_deep_dt:
+        return False
+
+    now_dt = _normalize_watermark_datetime(now) if now is not None else datetime.now(timezone.utc)
+    if now_dt is None:
+        now_dt = datetime.now(timezone.utc)
+
+    elapsed_seconds = (now_dt - last_deep_dt).total_seconds()
+    return elapsed_seconds >= interval_days * 86400
+
+
+def record_deep_dream_completion(
+    state_file: str | Path = DEFAULT_STATE_FILE,
+    completed_at: str | None = None,
+) -> DreamState:
+    """Records completion of a Deep Dream pass in the persistent state file.
+
+    Args:
+        state_file: Path to dreaming/.state.json.
+        completed_at: Optional ISO timestamp string (defaults to current UTC time).
+
+    Returns:
+        Updated and persisted DreamState object.
+    """
+    state = load_state(state_file)
+    ts = completed_at.strip() if completed_at and completed_at.strip() else datetime.now(timezone.utc).isoformat()
+    state.last_deep_dream_timestamp = ts
+    state.stats["total_deep_dreams_completed"] = (
+        int(state.stats.get("total_deep_dreams_completed", 0)) + 1
+    )
     save_state_atomic(state, state_file)
     return state
 

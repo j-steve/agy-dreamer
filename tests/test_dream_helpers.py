@@ -42,10 +42,12 @@ from scripts.dream_helpers import (
     extract_user_prompts,
     get_readonly_connection,
     get_session_by_id,
+    is_deep_dream_due,
     list_active_memory_files,
     load_state,
     parse_workspace_uris,
     query_root_sessions,
+    record_deep_dream_completion,
     resolve_transcript_path,
     save_state_atomic,
     scan_keyed_invariants,
@@ -1573,6 +1575,65 @@ def test_update_state_watermark(tmp_path: Path) -> None:
         "session-2",
         "session-3",
     ]
+
+
+def test_is_deep_dream_due_schedule_and_activity_guards() -> None:
+    """Verifies weekly Deep Dream cadence and new-activity guard."""
+    now = datetime(2026, 10, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    # 1. Never consolidated anything -> not due
+    empty_state = DreamState()
+    assert is_deep_dream_due(empty_state, now=now) is False
+
+    # 2. Consolidated sessions exist, never ran a Deep Dream -> due immediately
+    first_time_state = DreamState(
+        last_consolidated_timestamp="2026-10-15T03:00:00Z",
+        last_deep_dream_timestamp=None,
+    )
+    assert is_deep_dream_due(first_time_state, now=now) is True
+
+    # 3. Ran Deep Dream 3 days ago (< 7 days) -> not due even with new sessions
+    recent_state = DreamState(
+        last_consolidated_timestamp="2026-10-15T03:00:00Z",
+        last_deep_dream_timestamp="2026-10-12T03:05:00Z",
+    )
+    assert is_deep_dream_due(recent_state, now=now) is False
+
+    # 4. Ran Deep Dream 14 days ago (>= 7 days), but NO new sessions consolidated since -> not due
+    idle_two_weeks_state = DreamState(
+        last_consolidated_timestamp="2026-10-01T03:00:00Z",
+        last_deep_dream_timestamp="2026-10-01T03:05:00Z",
+    )
+    assert is_deep_dream_due(idle_two_weeks_state, now=now) is False
+
+    # 5. Ran Deep Dream 8 days ago (>= 7 days) AND new sessions consolidated since -> due
+    due_state = DreamState(
+        last_consolidated_timestamp="2026-10-15T03:00:00Z",
+        last_deep_dream_timestamp="2026-10-07T03:05:00Z",
+    )
+    assert is_deep_dream_due(due_state, now=now) is True
+
+
+def test_record_deep_dream_completion(tmp_path: Path) -> None:
+    """Verifies recording Deep Dream completion timestamp and incrementing stats."""
+    state_file = tmp_path / "memory" / ".state.json"
+    initial_state = DreamState(
+        cold_start_completed=True,
+        last_consolidated_timestamp="2026-10-15T03:00:00Z",
+    )
+    save_state_atomic(initial_state, state_file)
+
+    completed_dt = datetime(2026, 10, 15, 3, 10, 0, tzinfo=timezone.utc)
+    updated = record_deep_dream_completion(
+        state_file=state_file,
+        completed_at=completed_dt,
+    )
+
+    assert updated.last_deep_dream_timestamp == "2026-10-15T03:10:00+00:00"
+    assert updated.stats["total_deep_dreams_completed"] == 1
+
+    # Running a follow-up check immediately after completion must report not due
+    assert is_deep_dream_due(updated, now=completed_dt) is False
 
 
 # ============================================================================

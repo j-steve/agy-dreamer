@@ -50,6 +50,8 @@ Master procedural runbook for extracting durable domain invariants, user axioms,
 [8. Turbo / Standard Execution] ──(Turbo: >= 0.9 auto-commit; < 0.9 stage to proposals/)
          │
 [9. Advance Watermark] ──(Atomic state update in dreaming/.state.json)
+         │
+[10. Weekly Deep Dream (If Due)] ──(If >= 7d & new activity: invoke_subagent Model="pro" compaction)
 ```
 
 ---
@@ -70,7 +72,8 @@ Master procedural runbook for extracting durable domain invariants, user axioms,
    - Filter by timestamp: `last_modified_time > watermark` using the `last_consolidated_timestamp` from `dreaming/.state.json` (or past 24 hours if uninitialized).
    - Filter out in-flight or empty sessions: skip sessions where `status == 'CASCADE_RUN_STATUS_RUNNING'` or `step_count == 0`.
 2. If zero qualifying sessions are returned:
-   - Conclude consolidation quietly: log `"Nothing to consolidate; watermark current."` and exit.
+   - Check `is_deep_dream_due(state)` from `dream_helpers.py`. If `True`, skip directly to **Step 10 (Weekly Deep Dream)**.
+   - Otherwise, conclude consolidation quietly: log `"Nothing to consolidate; watermark current."` and exit.
 
 ---
 
@@ -249,15 +252,43 @@ Read `turbo_mode` from `dreaming/.state.json` (defaults to `true`):
 
 ---
 
+### Step 10: Weekly Deep Dream Compaction & Architectural Audit (`Model="pro"`)
+
+Because daily consolidation runs on a lightweight model (`--model=flash`) to keep routine extraction inexpensive, a weekly holistic audit is chained sequentially at the end of the nightly run rather than scheduled as a separate cron daemon. Running sequentially inside the same job prevents parallel execution races when a sleeping machine wakes up after multiple days offline.
+
+1. **Cadence & Activity Gate**:
+   - Call `is_deep_dream_due(state)` from `dream_helpers.py`.
+   - A Deep Dream is due only when at least 7 days have elapsed since `last_deep_dream_timestamp` (or `last_deep_dream_timestamp` is `None`) **and** at least one session has been consolidated since the last Deep Dream (`last_consolidated_timestamp > last_deep_dream_timestamp`).
+   - If `is_deep_dream_due(state)` returns `False`, conclude the run immediately.
+2. **Escalate to `pro` Subagent**:
+   - When due, invoke a `pro` subagent using `invoke_subagent`:
+     - `TypeName`: `"self"`
+     - `Model`: `"pro"`
+     - `Role`: `"Weekly Deep Dream Architect"`
+   - Instruct the subagent to read `~/.gemini/config/AGENTS.md`, `dreaming/index.md`, and all active `dreaming/memories/*.md` files in full and perform two categories of work:
+     - **A. Autonomous Internal Compaction (Auto-Committed in `dreaming/`)**:
+       1. *Intra-File Synthesis*: Merge redundant or overlapping `<!-- INVARIANT_KEY -->` blocks within the same `memories/<slug>.md` file into a single tighter invariant, recording superseded keys in `dreaming/archive/superseded.md`.
+       2. *Global Rule Deduplication*: Remove any entry in `memories/preferences.md`, `memories/guardrails.md`, or domain files that is already explicitly codified in `~/.gemini/config/AGENTS.md`, archiving the retired duplicate to `dreaming/archive/superseded.md`.
+       3. *Manifest Hygiene*: Enrich missing trigger aliases in `dreaming/index.md` so semantic retrieval catches natural entity names and domain terms, and run `prune_empty_domains_from_manifest()`.
+       4. *Atomic Commit*: Commit internal `dreaming/` compactions in `agy-core` (`git commit -m "dream(deep): weekly memory compaction and manifest hygiene"`).
+     - **B. Cross-Boundary & Constitutional Proposals (Staged to `dreaming/proposals/YYYY-MM-DD-deep-dream.md`)**:
+       1. *Constitutional Promotion (`memories/` $\rightarrow$ `AGENTS.md`)*: Identify universal interaction axioms or guardrails that apply across almost every turn and propose concise 1–2 sentence rules for `AGENTS.md` alongside removal of the verbose `memories/` entry.
+       2. *Constitutional Demotion (`AGENTS.md` $\rightarrow$ `memories/<slug>.md`)*: Identify narrow, domain-specific rules in `AGENTS.md` that inflate the baseline token footprint on unrelated turns and propose moving them into a lazy-loaded `memories/<slug>.md` file.
+       3. *Obsolescence Retirement*: Flag invariants referencing deprecated tools, retired projects, or superseded workflows for human confirmation before deletion.
+3. **Record Completion**:
+   - Once the `pro` subagent finishes, call `record_deep_dream_completion()` from `dream_helpers.py` to persist `last_deep_dream_timestamp` and increment `stats["total_deep_dreams_completed"]` in `dreaming/.state.json`.
+
+---
+
 ## Scheduled Cron Job Configuration
 
-Antigravity executes nightly dreaming via the background `schedule` tool:
+Antigravity executes nightly dreaming via the background sidecar (`--model=flash` for daily incremental extraction, escalating to `Model="pro"` via `invoke_subagent` in Step 10 when a weekly Deep Dream is due):
 
 ```json
 {
   "CronExpression": "0 3 * * *",
   "IsDaemon": true,
-  "Prompt": "You are the Antigravity Dreamer. Your mission is to consolidate conversation sessions into long-term memory using the dreaming skill. Follow these steps strictly:\n1. DISCOVERY & BOOTSTRAP: Query root sessions (nesting_depth == 0) in conversation_summaries.db modified since the watermark timestamp in dreaming/.state.json (or process historical sessions if watermark uninitialized).\n2. TRANSCRIPT EXTRACTION: For each qualifying session, extract partitioned turns using dream_helpers.py with watermark, distilling invariants strictly from New Activity while using Prior Context for reference.\n3. SYNTHESIS & CLASSIFICATION: Load dreaming/index.md and active domain files. Apply the 4-Tier Epistemic Classification and Keyed Invariant Schema. Discard transient operational noise using semantic judgment.\n4. DYNAMIC DOMAIN MANAGEMENT: If an invariant belongs to a new domain or project, dynamically mint memories/<slug>.md and register it in dreaming/index.md via register_domain_in_manifest(). Prune any 0-invariant stub files via prune_empty_domains_from_manifest().\n5. CONTRADICTION & SUPERSESSION: Match existing INVARIANT_KEY tags. If technical decisions evolved, archive superseded rules to dreaming/archive/superseded.md.\n6. COMMIT OR STAGE: In Turbo Mode (default), auto-commit high-confidence (>= 0.9) invariants directly with atomic git commits in agy-core, and stage ambiguous items to dreaming/proposals/YYYY-MM-DD.md. In Standard Mode, stage all proposals.\n7. WATERMARK: Advance the watermark in dreaming/.state.json via atomic write. If there is nothing meaningful to consolidate, exit quietly."
+  "Prompt": "You are the Antigravity Dreamer. Your mission is to consolidate conversation sessions into long-term memory using the dreaming skill. Follow these steps strictly:\n1. DISCOVERY & BOOTSTRAP: Query root sessions (nesting_depth == 0) in conversation_summaries.db modified since the watermark timestamp in dreaming/.state.json (or process historical sessions if watermark uninitialized). If zero sessions are returned, check is_deep_dream_due(state) in dream_helpers.py; if False, exit quietly, otherwise skip to Step 8.\n2. TRANSCRIPT EXTRACTION: For each qualifying session, extract partitioned turns using dream_helpers.py with watermark, distilling invariants strictly from New Activity while using Prior Context for reference.\n3. SYNTHESIS & CLASSIFICATION: Load dreaming/index.md and active domain files. Apply the 4-Tier Epistemic Classification and Keyed Invariant Schema across people/, domains/, and projects/. Discard transient operational noise using semantic judgment.\n4. DYNAMIC DOMAIN MANAGEMENT: If an invariant belongs to a new person, domain, or project, dynamically mint memories/<slug>.md and register it in dreaming/index.md via register_domain_in_manifest(). Prune any 0-invariant stub files via prune_empty_domains_from_manifest().\n5. CONTRADICTION & SUPERSESSION: Match existing INVARIANT_KEY tags. If technical decisions evolved, archive superseded rules to dreaming/archive/superseded.md.\n6. COMMIT OR STAGE: In Turbo Mode (default), auto-commit high-confidence (>= 0.9) invariants directly with atomic git commits in agy-core, and stage ambiguous items or AGENTS.md amendments to dreaming/proposals/. In Standard Mode, stage all proposals.\n7. WATERMARK: Advance the watermark in dreaming/.state.json via atomic write.\n8. WEEKLY DEEP DREAM (IF DUE): Check is_deep_dream_due(state) from dream_helpers.py. If True, invoke_subagent(TypeName='self', Model='pro', Role='Weekly Deep Dream Architect') to execute Step 10 of the dreaming skill (auto-commit internal memory compactions and AGENTS.md deduplication, stage cross-boundary AGENTS.md promotions/demotions to dreaming/proposals/YYYY-MM-DD-deep-dream.md), then call record_deep_dream_completion()."
 }
 ```
 
