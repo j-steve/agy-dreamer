@@ -56,7 +56,7 @@ Master procedural runbook for extracting durable domain invariants, user axioms,
 
 ### Step 0: Dynamic Domain Discovery & Zero Empty Stubs
 
-1. **Dynamic On-Demand Minting**: Any nightly consolidation run can add or remove domains. When an invariant is distilled for a new project or domain that lacks an active memory file, the Dreamer dynamically creates `memories/<slug>.md` with that invariant and registers it in `dreaming/index.md` via `register_domain_in_manifest()`.
+1. **Dynamic On-Demand Minting**: Any nightly consolidation run can add or remove domains. When an invariant is distilled for a new person/collaborator (`category="people"`), life/infrastructure domain (`category="domains"`), or engineering project (`category="projects"`) that lacks an active memory file, the Dreamer dynamically creates `memories/<slug>.md` with that invariant and registers it in `dreaming/index.md` via `register_domain_in_manifest()`.
 2. **Zero Empty Files Invariant**: A memory file must NEVER exist as an empty stub. If a memory file has 0 invariants (or all its invariants are superseded/transferred), it is deleted from disk and pruned from `dreaming/index.md` via `prune_empty_domains_from_manifest()`.
 3. **No Separate Cold-Start Required**: A separate cold-start backfill is obsolete. When initialized on a fresh system, the incremental consolidation engine simply runs with an empty watermark, naturally processing history and minting active files on demand without pre-baking empty stubs.
 
@@ -107,9 +107,14 @@ Evaluate candidate signals against the 4-Tier Epistemic Classification Model:
 | Tier | Epistemic Class | Signal Criteria | Destination File | Line Budget |
 | :--- | :--- | :--- | :--- | :--- |
 | **Tier 1** | **User Interaction Axioms** | Explicit corrections on communication tone, depth, persona, problem-solving posture | `memories/preferences.md` | Max 1,000 lines |
-| **Tier 2** | **Project & Domain Invariants** | Architectural boundaries, non-negotiable data models, negative constraints, hardware bindings across `projects/` and `domains/` | `memories/<slug>.md` | Max 1,000 lines per file |
+| **Tier 2** | **Project & Domain Invariants** | Architectural boundaries, non-negotiable data models, negative constraints, hardware bindings, collaborator/person profiles (relationships, contact routing, pronunciation, local OS/devices), and non-code domain rules across `people/`, `domains/`, and `projects/` | `memories/<slug>.md` | Max 1,000 lines per file |
 | **Tier 3** | **Environment Realities** | Host system idiosyncrasies, OS shell quirks, runtime version boundaries, tool defects | `memories/guardrails.md` | Max 1,000 lines |
 | **Tier 4** | **Transient Operational Noise** | Ephemeral debugging flags, temporary workarounds, single-task work items | **DISCARDED** | 0 lines |
+
+#### Tier 2 Scope Across People, Domains, and Projects:
+- **People & Collaborators (`category="people"`)**: Durable facts about recurring people in the user's life or work—such as relationships, preferred names/nicknames, voice/TTS pronunciation rules, email/contact routing, and their personal workstation OS or mobile devices—belong in `memories/<person_slug>.md` and are registered under `### People & Collaborators (\`memories/\`)` in `dreaming/index.md`. Do not discard recurring collaborator or family context as Tier 4 noise simply because it is not tied to a software repository.
+- **Life Domains & Infrastructure (`category="domains"`)**: Durable rules for non-project domains (e.g. smart home automation, travel preferences, household workflows, cloud infrastructure) belong in `memories/<domain_slug>.md` under `### Life Domains & Infrastructure (\`memories/\`)`.
+- **Engineering Projects (`category="projects"`)**: Repository-anchored architectural invariants belong in `memories/<project_slug>.md` under `### Engineering Projects (\`memories/\`)` with their `Workspace:` URI.
 
 #### Partitioned Context Distillation Rules:
 - **Restrict Active Distillation Strictly to `### New Activity`**: Invariant discovery, candidate rule extraction, and rule modifications must be derived strictly from turns within the `### New Activity` section.
@@ -125,7 +130,7 @@ Evaluate candidate signals against the 4-Tier Epistemic Classification Model:
 
 ### Step 5: Keyed Invariant Schema Standard
 
-Every Tier 2 project or domain invariant must be formatted according to the standardized Keyed Invariant Schema:
+Every Tier 2 project, person, or domain invariant must be formatted according to the standardized Keyed Invariant Schema:
 
 ```markdown
 <!-- INVARIANT_KEY: <namespace>.<identifier> -->
@@ -138,10 +143,10 @@ Every Tier 2 project or domain invariant must be formatted according to the stan
 ```
 
 #### Field Standards:
-- `INVARIANT_KEY`: Unique hierarchical identifier in snake_case (e.g., `project_name.component_boundary`, `infrastructure.service_restart_guard`).
+- `INVARIANT_KEY`: Unique hierarchical identifier in snake_case (e.g., `project_name.component_boundary`, `person_slug.identity_and_routing`, `infrastructure.service_restart_guard`).
 - `LAST_CONFIRMED`: ISO date (`YYYY-MM-DD`) and short conversation ID where this invariant was verified or restated (e.g. `YYYY-MM-DD (Session: <session_id>)`). **Literal Timestamp Anchoring**: Strictly anchor this date to the literal turn date (`created_at`) from the transcript where the invariant was affirmed or stated. NEVER default to today's date or the consolidation execution date.
 - `SUPERSEDES`: Prior invariant key being deprecated (omitted if new invariant).
-- `Target`: The exact component, class, service, interface, or conceptual entity.
+- `Target`: The exact code component, class, service, collaborator/person profile, or domain entity.
 - `Invariant`: Clear, imperative statement of what must be true.
 - `Negative Constraint`: Explicit prohibition of what must NOT be done. Essential for overriding default LLM training biases.
 - `Rationale`: Why the invariant exists and what regression it prevents.
