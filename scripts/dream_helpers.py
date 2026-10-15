@@ -1410,19 +1410,25 @@ def is_deep_dream_due(
 
 def record_deep_dream_completion(
     state_file: str | Path = DEFAULT_STATE_FILE,
-    completed_at: str | None = None,
+    completed_at: datetime | str | None = None,
 ) -> DreamState:
     """Records completion of a Deep Dream pass in the persistent state file.
 
     Args:
         state_file: Path to dreaming/.state.json.
-        completed_at: Optional ISO timestamp string (defaults to current UTC time).
+        completed_at: Optional datetime or ISO timestamp string (defaults to current UTC time).
 
     Returns:
         Updated and persisted DreamState object.
     """
     state = load_state(state_file)
-    ts = completed_at.strip() if completed_at and completed_at.strip() else datetime.now(timezone.utc).isoformat()
+    if isinstance(completed_at, datetime):
+        dt = completed_at if completed_at.tzinfo is not None else completed_at.replace(tzinfo=timezone.utc)
+        ts = dt.isoformat()
+    elif isinstance(completed_at, str) and completed_at.strip():
+        ts = completed_at.strip()
+    else:
+        ts = datetime.now(timezone.utc).isoformat()
     state.last_deep_dream_timestamp = ts
     state.stats["total_deep_dreams_completed"] = (
         int(state.stats.get("total_deep_dreams_completed", 0)) + 1
