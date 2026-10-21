@@ -1544,7 +1544,7 @@ def list_active_memory_files(
     for item in sorted(path.rglob("*.md")):
         if not item.is_file():
             continue
-        parts = [p.lower() for p in item.parts]
+        parts = [p.lower() for p in item.relative_to(path).parts]
         if any(p.startswith(".") for p in parts):
             continue
         if exclude_archive and "archive" in parts:
