@@ -29,7 +29,7 @@ from scripts.dream_helpers import (
     CompactTranscript,
     CompactTurn,
     DreamState,
-    KeyedInvariant,
+    MemoryBullet,
     SessionSummary,
     _build_root_sessions_query,
     _extract_tool_summary,
@@ -46,11 +46,14 @@ from scripts.dream_helpers import (
     list_active_memory_files,
     load_state,
     parse_workspace_uris,
+    prune_empty_domains_from_manifest,
     query_root_sessions,
     record_deep_dream_completion,
+    register_domain_in_manifest,
+    resolve_app_data_dir,
     resolve_transcript_path,
     save_state_atomic,
-    scan_keyed_invariants,
+    scan_memory_bullets,
     update_state_watermark,
     uri_to_local_path,
 )
@@ -1637,41 +1640,109 @@ def test_record_deep_dream_completion(tmp_path: Path) -> None:
 
 
 # ============================================================================
-# Category E Tests: Manifest & Invariant Scanning
+# Category E Tests: Runtime Auto-Detection, Manifest & Topical Bullet Scanning
 # ============================================================================
 
 
-def test_scan_keyed_invariants_nominal(mock_memory_dir: Path) -> None:
-    """Scans and extracts multiple Keyed Invariants from a markdown file."""
+def test_resolve_app_data_dir_desktop_vs_headless_cli(tmp_path: Path) -> None:
+    """Selects antigravity-cli when only the headless CLI database exists."""
+    # 1. Neither DB exists -> defaults to desktop directory
+    assert resolve_app_data_dir(tmp_path) == tmp_path / ".gemini" / "antigravity"
+
+    # 2. Only headless CLI DB exists -> selects antigravity-cli
+    cli_dir = tmp_path / ".gemini" / "antigravity-cli"
+    cli_dir.mkdir(parents=True)
+    (cli_dir / "conversation_summaries.db").write_bytes(b"")
+    assert resolve_app_data_dir(tmp_path) == cli_dir
+
+    # 3. Desktop DB also exists -> prefers desktop directory
+    desktop_dir = tmp_path / ".gemini" / "antigravity"
+    desktop_dir.mkdir(parents=True)
+    (desktop_dir / "conversation_summaries.db").write_bytes(b"")
+    assert resolve_app_data_dir(tmp_path) == desktop_dir
+
+
+def test_scan_memory_bullets_nominal(mock_memory_dir: Path) -> None:
+    """Scans topical Markdown bullets while skipping pre-H2 metadata lines."""
     sample_file = mock_memory_dir / "projects" / "sample-project.md"
     content = sample_file.read_text(encoding="utf-8")
-    invariants = scan_keyed_invariants(content, file_path=str(sample_file))
+    bullets = scan_memory_bullets(content, file_path=str(sample_file))
 
-    assert len(invariants) == 2
+    assert len(bullets) == 2
 
-    inv1 = invariants[0]
-    assert isinstance(inv1, KeyedInvariant)
-    assert inv1.key == "sample_project.contour_integrity"
-    assert "2026-09-27" in inv1.last_confirmed
-    assert inv1.supersedes == "sample_project.old_contour"
-    assert "GeometryModel" in inv1.target
-    assert "genuine multi-point polygons" in inv1.invariant
-    assert "Rectangular bounding boxes" in inv1.negative_constraint
-    assert "downstream cv" in inv1.rationale.lower()
-    assert inv1.file_path == str(sample_file)
+    b1 = bullets[0]
+    assert isinstance(b1, MemoryBullet)
+    assert b1.section == "Geometry & Perception"
+    assert b1.topic == "Polygon Contour Modeling"
+    assert "GeometryModel" in b1.body
+    assert "multi-point polygons" in b1.body
+    assert b1.confirmed_date == "2026-09-27"
+    assert b1.file_path == str(sample_file)
 
-    inv2 = invariants[1]
-    assert inv2.key == "sample_project.model_runtime"
-    assert inv2.supersedes is None
-    assert "Neural model" in inv2.target
-    assert "fp16" in inv2.invariant
+    b2 = bullets[1]
+    assert b2.section == "Geometry & Perception"
+    assert b2.topic == "GPU FP16 Execution"
+    assert "fp16" in b2.body
+    assert b2.confirmed_date == "2026-09-26"
 
 
-def test_scan_keyed_invariants_empty_and_none() -> None:
-    """Handles empty content or non-matching content."""
-    assert scan_keyed_invariants("") == []
-    assert scan_keyed_invariants(None) == []  # type: ignore
-    assert scan_keyed_invariants("# Just regular markdown without tags") == []
+def test_scan_memory_bullets_skips_code_fences_and_handles_empty() -> None:
+    """Ignores bullets inside fenced code blocks and handles empty inputs."""
+    assert scan_memory_bullets("") == []
+    assert scan_memory_bullets(None) == []  # type: ignore[arg-type]
+
+    stub_only = (
+        "# Stub Project\n"
+        "- **Workspace**: `file:///c%3A/Projects/stub`\n"
+        "- **Aliases**: [Stub]\n"
+        "```markdown\n"
+        "- **Fake Bullet Inside Code Block**: Should be ignored. (2026-10-01)\n"
+        "```\n"
+    )
+    assert scan_memory_bullets(stub_only) == []
+
+
+def test_register_and_prune_domains_in_manifest(tmp_path: Path) -> None:
+    """Preserves v2 topical bullet files while pruning 0-bullet header-only stubs."""
+    dream_dir = tmp_path / "dreaming"
+    memories_dir = dream_dir / "memories"
+    memories_dir.mkdir(parents=True)
+    manifest_path = dream_dir / "index.md"
+    manifest_path.write_text(
+        "# Antigravity Dreaming Manifest\n\n"
+        "### Life Domains & Infrastructure (`memories/`)\n"
+        "- `memories/preferences.md`: [Preferences]\n\n"
+        "### Engineering Projects (`memories/`)\n",
+        encoding="utf-8",
+    )
+
+    (memories_dir / "preferences.md").write_text("# Preferences\n", encoding="utf-8")
+    (memories_dir / "active-app.md").write_text(
+        "# Active App\n- **Workspace**: `file:///app`\n\n## Routing\n"
+        "- **Webhook Secret**: Stored in `credentials/app.json`. (2026-11-11)\n",
+        encoding="utf-8",
+    )
+    (memories_dir / "empty-stub.md").write_text(
+        "# Empty Stub\n- **Workspace**: `file:///stub`\n- **Aliases**: [Stub]\n",
+        encoding="utf-8",
+    )
+
+    assert register_domain_in_manifest(
+        manifest_path, "active-app", workspace_uri="file:///app", aliases=["Active App"]
+    )
+    assert register_domain_in_manifest(
+        manifest_path, "empty-stub", workspace_uri="file:///stub", aliases=["Stub"]
+    )
+
+    pruned = prune_empty_domains_from_manifest(manifest_path, memories_dir)
+    assert pruned == ["empty-stub.md"]
+    assert not (memories_dir / "empty-stub.md").exists()
+    assert (memories_dir / "active-app.md").exists()
+    assert (memories_dir / "preferences.md").exists()
+
+    updated_manifest = manifest_path.read_text(encoding="utf-8")
+    assert "memories/active-app.md" in updated_manifest
+    assert "memories/empty-stub.md" not in updated_manifest
 
 
 def test_list_active_memory_files(mock_memory_dir: Path) -> None:

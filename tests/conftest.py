@@ -321,37 +321,24 @@ def mock_memory_dir(tmp_path: Path) -> Path:
         "# Guardrails\nNever restart HA.\n", encoding="utf-8"
     )
 
-    # Project file with multiple Keyed Invariants
-    sample_project_content = """# Sample Project Invariants
+    # Project file with Dreaming v2 topical bullets and header metadata
+    sample_project_content = """# Sample Project Memory
+- **Workspace**: `file:///c%3A/Projects/sample-project`
+- **Aliases**: [Sample Project, sample-project]
 
-<!-- INVARIANT_KEY: sample_project.contour_integrity -->
-<!-- LAST_CONFIRMED: 2026-09-27 (Session: 5b184a03) -->
-<!-- SUPERSEDES: sample_project.old_contour -->
-- **Target**: `GeometryModel` polygon contour modeling
-  **Invariant**: Contour and mask must be genuine multi-point polygons.
-  **Negative Constraint**: Rectangular bounding boxes and legacy shims are strictly forbidden.
-  **Rationale**: Downstream CV spatial perception requires true geometric centroids.
-
-<!-- INVARIANT_KEY: sample_project.model_runtime -->
-<!-- LAST_CONFIRMED: 2026-09-26 (Session: 1a2b3c4d) -->
-- **Target**: Neural model execution
-  **Invariant**: All model weights execute in GPU fp16 memory.
-  **Negative Constraint**: Never fall back to CPU emulation in production pipelines.
-  **Rationale**: CPU fallback causes throughput starvation.
+## Geometry & Perception
+- **Polygon Contour Modeling**: `GeometryModel` contours and masks use multi-point polygons rather than rectangular bounding boxes so downstream spatial centroids stay accurate. (2026-09-27)
+- **GPU FP16 Execution**: Neural model weights run in GPU fp16 memory; do not fall back to CPU emulation in production pipelines due to throughput starvation. (2026-09-26)
 """
     (mem_dir / "projects" / "sample-project.md").write_text(
         sample_project_content, encoding="utf-8"
     )
 
-    # Domain file with single invariant
-    cloud_infra_content = """# Cloud Infrastructure Domain Invariants
+    # Domain file with single topical bullet
+    cloud_infra_content = """# Cloud Infrastructure Memory
 
-<!-- INVARIANT_KEY: cloud_infra.service_uptime_rule -->
-<!-- LAST_CONFIRMED: 2026-09-20 (Session: e9f8d7c6) -->
-- **Target**: Core Service Host
-  **Invariant**: Core service must maintain continuous uptime during automated checks.
-  **Negative Constraint**: NEVER restart core service without explicit express permission.
-  **Rationale**: Restarts disrupt ongoing automations and service connectivity.
+## Service Availability
+- **Core Service Uptime**: Maintain continuous uptime on the core service host during automated checks; do not restart the core service without explicit user confirmation. (2026-09-20)
 """
     (mem_dir / "domains" / "cloud-infra.md").write_text(
         cloud_infra_content, encoding="utf-8"

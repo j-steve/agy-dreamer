@@ -44,13 +44,52 @@ _DEFAULT_MAX_THOUGHT_CHARS: int = 2000
 _DEFAULT_MIN_STEP_COUNT: int = 1
 _DEFAULT_PRIOR_CONTEXT_TURNS: int = 4
 _RUNNING_STATUS: str = "CASCADE_RUN_STATUS_RUNNING"
+_HEADER_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "workspace",
+        "aliases",
+        "live share",
+        "github repository",
+        "runbook skill",
+        "project skill",
+        "credentials",
+        "credentials directory",
+    }
+)
+_H2_HEADING_RE: re.Pattern[str] = re.compile(r"^##\s+(.+?)\s*$")
+_TOP_BULLET_RE: re.Pattern[str] = re.compile(r"^-\s+(.+)$")
+_BOLD_TOPIC_RE: re.Pattern[str] = re.compile(r"^\*\*([^*]+)\*\*\s*:\s*(.+)$", re.DOTALL)
+_TRAILING_DATE_RE: re.Pattern[str] = re.compile(r"\s*\((\d{4}-\d{2}-\d{2})\)\.?\s*$")
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH: Path = (
-    Path.home() / ".gemini" / "antigravity" / "conversation_summaries.db"
-)
-DEFAULT_BRAIN_DIR: Path = Path.home() / ".gemini" / "antigravity" / "brain"
+
+def resolve_app_data_dir(home_dir: Path | None = None) -> Path:
+    """Resolves the active Antigravity runtime directory (Desktop IDE or Headless CLI).
+
+    Prefers ``~/.gemini/antigravity`` when its session database is present or when
+    neither runtime directory has initialized a database yet; falls back to
+    ``~/.gemini/antigravity-cli`` on headless CLI hosts.
+
+    Args:
+        home_dir: Optional home directory override for isolated testing.
+
+    Returns:
+        Resolved Path to the Antigravity app data directory.
+    """
+    gemini_root = (home_dir if home_dir is not None else Path.home()) / ".gemini"
+    desktop_dir = gemini_root / "antigravity"
+    cli_dir = gemini_root / "antigravity-cli"
+    if not (desktop_dir / "conversation_summaries.db").is_file() and (
+        cli_dir / "conversation_summaries.db"
+    ).is_file():
+        return cli_dir
+    return desktop_dir
+
+
+_DEFAULT_APP_DATA_DIR: Path = resolve_app_data_dir()
+DEFAULT_DB_PATH: Path = _DEFAULT_APP_DATA_DIR / "conversation_summaries.db"
+DEFAULT_BRAIN_DIR: Path = _DEFAULT_APP_DATA_DIR / "brain"
 DEFAULT_STATE_FILE: Path = (
     Path.home() / ".gemini" / "config" / "dreaming" / ".state.json"
 )
@@ -360,31 +399,25 @@ class DreamState:
 
 
 @dataclass
-class KeyedInvariant:
-    """A durable architectural invariant extracted from sessions.
+class MemoryBullet:
+    """An atomic topical memory bullet parsed from a Markdown memory file.
 
     Attributes:
-        key: Unique dot-delimited key (e.g. 'sample_project.feature_invariance').
-        last_confirmed: Human-readable or ISO timestamp/session confirmation string.
-        supersedes: Previous invariant key this rule replaces, or None.
-        target: Target component, module, or architecture boundary.
-        invariant: Unconditional affirmative invariant requirement.
-        negative_constraint: Explicit anti-pattern or prohibited behavior.
-        rationale: Operational or architectural justification for the rule.
-        file_path: Source memory file path containing the invariant block.
+        section: Enclosing H2 section heading (empty if before any H2 heading).
+        topic: Bold lead-in topic label (empty if bullet has no bold label).
+        body: Concise factual or operational text of the bullet.
+        confirmed_date: Literal ISO date ``YYYY-MM-DD`` suffix if present.
+        file_path: Source memory file path containing the entry.
     """
 
-    key: str
-    last_confirmed: str
-    supersedes: str | None
-    target: str
-    invariant: str
-    negative_constraint: str
-    rationale: str
+    section: str
+    topic: str
+    body: str
+    confirmed_date: str = ""
     file_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        """Serializes the invariant to a dictionary."""
+        """Serializes the memory bullet to a dictionary."""
         return asdict(self)
 
 
@@ -1443,79 +1476,122 @@ save_dream_state = save_state_atomic
 
 
 # ============================================================================
-# Category E: Manifest & Invariant Scanning
+# Category E: Manifest & Topical Memory Bullet Scanning
 # ============================================================================
 
 
-def scan_keyed_invariants(
+def scan_memory_bullets(
     content: str,
     file_path: str = "",
-) -> list[KeyedInvariant]:
-    """Scans markdown content for Keyed Invariant specification blocks.
+) -> list[MemoryBullet]:
+    """Scans Markdown memory content for atomic topical bullet entries.
 
-    Parses:
-    - <!-- INVARIANT_KEY: <key> -->
-    - <!-- LAST_CONFIRMED: <timestamp/session> -->
-    - <!-- SUPERSEDES: <old_key> -->
-    - **Target**: <target text>
-    - **Invariant**: <invariant text>
-    - **Negative Constraint**: <constraint text>
-    - **Rationale**: <rationale text>
+    Ignores fenced code blocks and top-of-file metadata bullets (such as
+    ``Workspace``, ``Aliases``, ``Runbook Skill``, or ``Credentials``) that
+    appear before the first H2 section heading so stub files with only header
+    metadata report zero active bullets.
 
     Args:
         content: Markdown string to parse.
         file_path: Optional path of the source file for attribution.
 
     Returns:
-        List of KeyedInvariant dataclasses extracted from the markdown.
+        Ordered list of MemoryBullet objects extracted from the file.
     """
     if not content or not isinstance(content, str):
         return []
 
-    key_pattern = re.compile(r"<!--\s*INVARIANT_KEY:\s*([^\s>]+)\s*-->")
-    matches = list(key_pattern.finditer(content))
-    if not matches:
-        return []
+    bullets: list[MemoryBullet] = []
+    current_section = ""
+    in_code_fence = False
+    pending_lines: list[str] = []
+    pending_section = ""
 
-    invariants: list[KeyedInvariant] = []
-    for i, match in enumerate(matches):
-        start = match.start()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
-        chunk = content[start:end]
-        key = match.group(1).strip()
-
-        lc_match = re.search(r"<!--\s*LAST_CONFIRMED:\s*(.*?)\s*-->", chunk)
-        sp_match = re.search(r"<!--\s*SUPERSEDES:\s*(.*?)\s*-->", chunk)
-
-        target = _extract_invariant_field(chunk, "Target")
-        invariant = _extract_invariant_field(chunk, "Invariant")
-        neg_constraint = _extract_invariant_field(chunk, "Negative Constraint")
-        rationale = _extract_invariant_field(chunk, "Rationale")
-
-        invariants.append(
-            KeyedInvariant(
-                key=key,
-                last_confirmed=lc_match.group(1).strip() if lc_match else "",
-                supersedes=sp_match.group(1).strip() if sp_match else None,
-                target=target,
-                invariant=invariant,
-                negative_constraint=neg_constraint,
-                rationale=rationale,
-                file_path=file_path,
-            )
+    def flush_pending() -> None:
+        if not pending_lines:
+            return
+        bullet = _build_memory_bullet(
+            raw_text="\n".join(pending_lines),
+            section=pending_section,
+            file_path=file_path,
         )
+        pending_lines.clear()
+        if bullet is not None:
+            bullets.append(bullet)
 
-    return invariants
+    for raw_line in content.splitlines():
+        stripped = raw_line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            flush_pending()
+            in_code_fence = not in_code_fence
+            continue
+        if in_code_fence:
+            continue
+
+        h2_match = _H2_HEADING_RE.match(raw_line)
+        if h2_match:
+            flush_pending()
+            current_section = h2_match.group(1).strip()
+            continue
+
+        if raw_line.startswith("#"):
+            flush_pending()
+            continue
+
+        bullet_match = _TOP_BULLET_RE.match(raw_line)
+        if bullet_match:
+            flush_pending()
+            pending_section = current_section
+            pending_lines.append(bullet_match.group(1).strip())
+            continue
+
+        if pending_lines:
+            if not stripped:
+                flush_pending()
+            elif raw_line.startswith(("  ", "\t")):
+                pending_lines.append(stripped.rstrip())
+            else:
+                flush_pending()
+
+    flush_pending()
+    return bullets
 
 
-def _extract_invariant_field(chunk: str, field_name: str) -> str:
-    """Extracts the value of a specific named field inside an invariant markdown chunk."""
-    pattern = (
-        rf"(?:-\s*)?\*{{0,2}}{re.escape(field_name)}\*{{0,2}}:\s*(.*?)"
-        rf"(?=(?:\n\s*(?:-\s*)?\*{{0,2}}(?:Target|Invariant|Negative Constraint|Rationale)\*{{0,2}}:|\Z))"
+def _build_memory_bullet(
+    raw_text: str,
+    section: str,
+    file_path: str,
+) -> MemoryBullet | None:
+    """Parses a raw bullet text block into a MemoryBullet or None if header metadata."""
+    cleaned = raw_text.strip()
+    if not cleaned:
+        return None
+
+    topic = ""
+    body_text = cleaned
+    topic_match = _BOLD_TOPIC_RE.match(cleaned)
+    if topic_match:
+        topic = topic_match.group(1).strip()
+        body_text = topic_match.group(2).strip()
+        if not section and topic.lower() in _HEADER_METADATA_KEYS:
+            return None
+
+    confirmed_date = ""
+    date_match = _TRAILING_DATE_RE.search(body_text)
+    if date_match:
+        confirmed_date = date_match.group(1)
+        body_text = body_text[: date_match.start()].strip()
+
+    if not body_text and not topic:
+        return None
+
+    return MemoryBullet(
+        section=section,
+        topic=topic,
+        body=body_text,
+        confirmed_date=confirmed_date,
+        file_path=file_path,
     )
-    match = re.search(pattern, chunk, re.DOTALL | re.IGNORECASE)
-    return match.group(1).strip() if match else ""
 
 
 def list_active_memory_files(
@@ -1553,10 +1629,6 @@ def list_active_memory_files(
             continue
         results.append(item)
     return results
-
-
-# Alias for compatibility with survey report
-parse_keyed_invariants = scan_keyed_invariants
 
 
 def register_domain_in_manifest(
@@ -1629,11 +1701,12 @@ def prune_empty_domains_from_manifest(
     manifest_path: str | Path,
     memories_dir: str | Path,
 ) -> list[str]:
-    """Prunes empty memory files and unreferenced stub domains from index.md.
+    """Prunes empty stub memory files and unreferenced entries from index.md.
 
-    Scans memories/ directory and removes any domain or project markdown file
-    that has 0 keyed invariants (excluding core preferences.md and guardrails.md).
-    Then prunes manifest entries matching the removed files.
+    Scans memories/ directory and removes any domain, person, or project
+    markdown file that contains zero topical memory bullets (excluding core
+    ``preferences.md`` and ``guardrails.md``), then removes manifest entries
+    referencing missing files.
 
     Args:
         manifest_path: Path to dreaming/index.md.
@@ -1648,8 +1721,6 @@ def prune_empty_domains_from_manifest(
         return []
 
     removed_files: list[str] = []
-
-    # 1. Inspect all files in memories_dir
     core_files = {"preferences.md", "guardrails.md"}
     active_files: set[str] = set()
 
@@ -1658,17 +1729,17 @@ def prune_empty_domains_from_manifest(
             active_files.add(item.name)
             continue
         try:
-            text = item.read_text(encoding="utf-8")
-            invariants = scan_keyed_invariants(text)
-            if len(invariants) == 0:
+            bullets = scan_memory_bullets(
+                item.read_text(encoding="utf-8"), file_path=str(item)
+            )
+            if not bullets:
                 item.unlink()
                 removed_files.append(item.name)
             else:
                 active_files.add(item.name)
-        except Exception:
+        except OSError:
             active_files.add(item.name)
 
-    # 2. Prune manifest entries for any file not in active_files
     content = m_path.read_text(encoding="utf-8")
     lines = content.splitlines()
     new_lines: list[str] = []
@@ -1676,13 +1747,14 @@ def prune_empty_domains_from_manifest(
 
     while i < len(lines):
         line = lines[i]
-        # Match project block: - `memories/<file>.md`:
         match_proj = re.match(r"^-\s*`memories/([^`]+)`\s*:\s*$", line)
         if match_proj:
             fname = match_proj.group(1).strip()
             sublines: list[str] = []
             j = i + 1
-            while j < len(lines) and (lines[j].startswith("  ") or lines[j].startswith("\t")):
+            while j < len(lines) and (
+                lines[j].startswith("  ") or lines[j].startswith("\t")
+            ):
                 sublines.append(lines[j])
                 j += 1
             if fname not in active_files:
@@ -1694,7 +1766,6 @@ def prune_empty_domains_from_manifest(
             i = j
             continue
 
-        # Match single-line domain or person: - `memories/<file>.md`: [...]
         match_dom = re.match(r"^-\s*`memories/([^`]+)`\s*:\s*\[(.*?)\]", line)
         if match_dom:
             fname = match_dom.group(1).strip()
